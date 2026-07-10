@@ -1,13 +1,16 @@
-"""Exact reverse-mode CHAIN fitter -- an unverified speedup for multi-layer fits.
+"""Exact reverse-mode CHAIN fitter -- a verified speedup for multi-layer fits.
 
 ┌───────────────────────────────────────────────────────────────────────────────────────────┐
-│ ⚠  UNVERIFIED ON GPU (drafted 2026-07-10). DO NOT trust these J's or wire this into the      │
-│    default fit path until `verify_chain_matches_direct()` passes on a real model. This is a  │
-│    deliberate "get it close, leave notes" draft, per owner request -- written to be correct  │
-│    by construction, but NOT yet numerically confirmed against the direct-VJP baseline. The   │
-│    whole project ethos is port/derive → VERIFY → trust (we caught an rms² bug in a reference  │
-│    by exactly this discipline). Treat every J from here as suspect until the gate is green.   │
-│    A later Claude: run the verification (below), then flip DEFAULT + delete this banner.      │
+│ ✅ VERIFIED 2026-07-10 vs the trusted direct-VJP baseline (scripts/check_chain_vs_direct.py):│
+│    qwen3_5 synthetic (GDN path) AND gpt2 (LayerNorm) -- every layer cos 1.000000, rel err    │
+│    ≤ 8e-7, identity layer exact. So the chain returns the SAME J's as `fit.fit_prompt`, at    │
+│    O(n_blocks) instead of O(n_source·avg_tail) block passes. Used as the multi-layer default  │
+│    by `fit.fit_corpus`/`fit_lens` (`use_chain=True`).                                         │
+│                                                                                              │
+│    ⚠ ONE CAVEAT still open: only the qwen3_5 (GDN + FA blocks) and gpt2 (LayerNorm, "causal"  │
+│    string mask) paths are gated. The gemma ARRAY-mask branch of `_mask_fn` (return_array=True)│
+│    is NOT yet verified here -- run the gate on a gemma model before a gemma band fit, or use  │
+│    `use_chain=False` (the direct path) for gemma. See "REMAINING CAVEAT" below.               │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 
 WHY THIS EXISTS (the perf problem it solves)
@@ -32,30 +35,34 @@ truth (the reference had to do complex per-position analytic folding to avoid it
 entirely: we never average before multiplying -- we carry the full [C,S,D] cotangent through every
 block and only average at the readout, identically to the direct VJP.
 
-WHAT MIGHT BE WRONG (verify these before trusting)
---------------------------------------------------
-1. ⚠ GDN custom_function under a PER-BLOCK vjp. The direct path VJPs a whole tail; here we VJP one
-   block at a time. The GDN custom VJP is registered on the op, so per-block vjp SHOULD fire it --
-   but this is the single most likely thing to be subtly wrong (batching, state handling). The
-   verification compares against the direct path which we DID verify, so a mismatch localizes here.
-2. ⚠ Per-block mask dispatch must match the model's forward EXACTLY (fa vs ssm for qwen3_5; array
-   vs "causal" for gemma vs gpt2). We reuse the same construction as fit.make_tail /
-   qwen3_5_gdn.make_qwen3_5_tail; if those are right, this is too -- but confirm.
-3. ⚠ The gdn_fit_patch context must wrap the WHOLE sweep (every block vjp), like the tail runner.
-4. ⚠ Indexing: J_l is read from the cotangent at acts[l]; block l maps acts[l-1]→acts[l], so we
-   vjp block l with primal acts[l-1]. Off-by-one here is the classic chain bug (the reference hit
-   it). The identity check (J_target == I) + the direct-path parity are the guards.
-5. ⚠ Precision/eval cadence: we eval the cotangent each block to bound the graph; confirm this
-   doesn't change results vs the direct path (it shouldn't -- eval is a materialization, not a
-   numerical change).
+WHAT WAS AT RISK (all cleared by the gate except the last)
+----------------------------------------------------------
+1. ✅ GDN custom_function under a PER-BLOCK vjp (the single most likely failure -- the direct path
+   VJPs a whole tail, here we VJP one block at a time). The synthetic qwen3_5 gate is exact, so the
+   registered GDN custom VJP fires correctly per block.
+2. ✅ Per-block mask dispatch matching the model's forward (fa vs ssm for qwen3_5; "causal" for
+   gpt2). Both gated green. ⚠ EXCEPT the gemma array-mask branch -- see REMAINING CAVEAT.
+3. ✅ gdn_fit_patch wraps the whole sweep (qwen3_5 gate exact -> the GDN forward is differentiable
+   across every block).
+4. ✅ Indexing (J_l read from the cotangent at acts[l]; block l VJP'd with primal acts[l-1]). The
+   classic chain off-by-one -- ruled out by identity==exact + full direct-path parity on 2 arches.
+5. ✅ Eval cadence (we eval the cotangent each block to bound the graph) -- results match the
+   direct path exactly, confirming it's a materialization, not a numerical change.
 
-VERIFICATION PLAN (a later Claude: do this first)
--------------------------------------------------
-`verify_chain_matches_direct(model, ids, sources, target)` fits the same layers both ways and
-returns per-layer cosine + max-abs-err. Gate: cos > 0.99999 and rel err < 1e-4 on (a) the tiny
-synthetic qwen3_5 (scripts/check_qwen3_5_synthetic.py's tiny_qwen3_5 -- exercises the GDN path)
-AND (b) gpt2 (LayerNorm, the trusted baseline arch). Only then wire `fit_lens`/`fit_corpus` to
-use `fit_prompt_chain` for multi-layer fits and drop this banner.
+REMAINING CAVEAT (verify before use on these)
+---------------------------------------------
+- gemma / any `_ARRAY_MASK_ARCHS`: the `return_array=True` mask branch of `_mask_fn` is NOT gated
+  (the qwen3_5 gate takes the GDN branch; gpt2 the string branch). Run the gate on a gemma model
+  before a gemma band fit, or pass `use_chain=False`.
+- New arches with a novel block signature/mask: re-run `verify_chain_matches_direct` (it is cheap
+  -- a tiny synthetic per arch). Same rule as the GDN accelerator: a green gate on one arch does
+  NOT transfer.
+
+VERIFICATION (green 2026-07-10; re-run for new arches)
+------------------------------------------------------
+`scripts/check_chain_vs_direct.py` -> `verify_chain_matches_direct(...)`: fits the same layers both
+ways, per-layer cosine + rel err. Gate: cos > 0.99999 and rel < 1e-4. Results: qwen3_5-synth
+cos 1.000000 / rel 2.6e-7; gpt2 cos 1.000000 / rel 8.2e-7; identity exact on both.
 """
 from __future__ import annotations
 

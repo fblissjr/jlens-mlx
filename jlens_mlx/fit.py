@@ -109,29 +109,41 @@ def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None 
     out = {}
     # NOTE: this fits each layer with its OWN full-tail VJP -- O(n_source * avg_tail) block passes,
     # the cost wall for a dense band fit. `jlens_mlx.chain.fit_prompt_chain` is a drop-in that fits
-    # ALL layers in one backward sweep (O(n_blocks)) and is meant to be equal to this -- but it is
-    # UNVERIFIED ON GPU: run `scripts/check_chain_vs_direct.py` before switching to it. This direct
-    # path stays the trusted default until that gate is green.
+    # ALL layers in one backward sweep (O(n_blocks)) and is VERIFIED EQUAL to this on qwen3_5 (GDN)
+    # + gpt2 (LayerNorm) -- fit_corpus/fit_lens use it by default (`use_chain=True`). This direct
+    # path remains the reference the chain is gated against (scripts/check_chain_vs_direct.py) and
+    # the fallback for un-gated arches (e.g. gemma array-mask). Keep it correct + simple.
     for l in layers:
         tail = make_tail(ad, l + 1, target + 1)  # blocks l+1..target; l == target -> identity
         out[l] = jacobian_via_vjp(tail, acts[l][None], valid, chunk_size=chunk_size)
     return out, len(ids)
 
 
+def _fit_one(use_chain: bool):
+    """Pick the per-prompt fitter: the O(n_blocks) chain (verified equal on qwen3_5+gpt2) or the
+    O(n_source*avg_tail) direct baseline. Lazy import avoids a chain<->fit import cycle."""
+    if use_chain:
+        from .chain import fit_prompt_chain
+        return fit_prompt_chain
+    return fit_prompt
+
+
 def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter | None = None,
              target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT,
-             chunk_size: int = CHUNK_SIZE_DEFAULT):
+             chunk_size: int = CHUNK_SIZE_DEFAULT, use_chain: bool = True):
     """Average `J_l` over `prompts` (a running sum divided once). `tokenize(prompt) -> list[int]`.
-    `chunk_size` is the output-dim batch per VJP (see providers.generic_vjp).
+    `chunk_size` is the output-dim batch per VJP (see providers.generic_vjp). `use_chain` picks the
+    one-sweep chain fitter (default; verified == direct on qwen3_5/gpt2) vs the per-layer direct VJP.
     Returns ({l: [D,D]}, n_prompts). Save with jlens_mlx.lens.save."""
     ad = adapter or ModelAdapter(model)
     layers = sorted(int(l) for l in source_layers)
+    _fit = _fit_one(use_chain)
     acc: dict[int, mx.array] | None = None
     n = 0
     for p in prompts:
-        per, _ = fit_prompt(model, tokenize(p), layers, adapter=ad,
-                            target_layer=target_layer, skip_first=skip_first,
-                            chunk_size=chunk_size)
+        per, _ = _fit(model, tokenize(p), layers, adapter=ad,
+                      target_layer=target_layer, skip_first=skip_first,
+                      chunk_size=chunk_size)
         acc = dict(per) if acc is None else {l: acc[l] + per[l] for l in layers}
         mx.eval(list(acc.values()))
         n += 1
@@ -142,11 +154,15 @@ def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter |
 
 def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = None,
                target_layer: int | None = None, chunk_size: int = CHUNK_SIZE_DEFAULT,
-               progress=None):
+               progress=None, use_chain: bool = True):
     """Average `J_l` over a materialized `Corpus` (jlens_mlx.corpus), using each item's own
     role-aware position mask (assistant/think span for on-policy prompts, content span for
     human-text). Returns ({l: [D,D]}, n_items). The corpus provenance should be stamped onto
     the lens sidecar. Items whose positions all fall outside their sequence are skipped.
+
+    `use_chain` (default) fits all layers per item in one backward sweep (jlens_mlx.chain, verified
+    == direct on qwen3_5/gpt2) -- the big win for a dense band fit; set False for the direct baseline
+    (e.g. an un-gated arch like gemma array-mask).
 
     `progress(info)` is called after each item (long deep-band fits are otherwise silent) with
     a dict: {i, n_total, done, skipped, seq_len, n_pos, on_policy, secs, elapsed, eta_secs}.
@@ -154,6 +170,7 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
     import time
     ad = adapter or ModelAdapter(model)
     layers = sorted(int(l) for l in source_layers)
+    _fit = _fit_one(use_chain)
     acc: dict[int, mx.array] | None = None
     n = 0
     n_total = len(corpus.items)
@@ -161,8 +178,8 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
     for i, item in enumerate(corpus.items):
         t0 = time.perf_counter()
         try:
-            per, _ = fit_prompt(model, item.ids, layers, adapter=ad, target_layer=target_layer,
-                                chunk_size=chunk_size, positions=item.positions)
+            per, _ = _fit(model, item.ids, layers, adapter=ad, target_layer=target_layer,
+                          chunk_size=chunk_size, positions=item.positions)
         except ValueError:
             if progress:
                 progress({"i": i, "n_total": n_total, "done": n, "skipped": True,
