@@ -73,10 +73,46 @@ def _tokenize(tokenizer):
     return tok
 
 
+# The heylook server only READS the workspace band -- jspace/features.band_layers =
+# fitted layers in the middle [0.25, 0.75) of the stack (layers 16..47 for the 64-layer
+# 27B). The strip, heatmap, features, risk router, and v3 visualizer all read only that
+# band. So a product-relevant own-fit must target 16..47; layers >47 (my earlier late-band
+# bootstrap) serve NOTHING in the product. Band layers are the DEEP end (long tails) -> the
+# real production run is server-stopped. Set JLENS_LAYERS to override.
+BAND_LO_FRAC, BAND_HI_FRAC = 0.25, 0.75
+
+
+def _band(n_layers: int) -> tuple[int, int]:
+    return int(n_layers * BAND_LO_FRAC), int(n_layers * BAND_HI_FRAC)
+
+
 def _default_layers(n_layers: int) -> list[int]:
-    # A late-band sample (short tails -> a fast, cheap bootstrap). The full-depth
-    # fit is the production run.
-    return sorted({n_layers - 1, n_layers - 2, int(n_layers * 0.75), int(n_layers * 0.6)})
+    # A sample ACROSS the product band [16,47] (not the cheap late layers, which the
+    # server never reads). Evenly spaced so a sparse bootstrap still spans the band.
+    lo, hi = _band(n_layers)
+    return sorted({lo, (lo + hi) // 2, hi - 1})
+
+
+def _provenance(model_path: str, arch: str) -> dict:
+    """Sidecar provenance so the server/UI can distinguish an own-fit from the
+    unknown-provenance provisional lens (which has hf_model_name=""). The sidecar is
+    a gitignored artifact, so the served model id is fine to record here."""
+    import datetime
+    import subprocess
+    model_id = os.path.basename(model_path.rstrip("/"))
+    try:
+        sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        sha = ""
+    return {
+        "model_id": model_id,
+        "hf_model_name": model_id,                 # non-empty => own-fit (not provisional)
+        "fit_source": "jlens-mlx own-fit",
+        "fit_date": datetime.date.today().isoformat(),
+        "jlens_git_sha": sha,
+        "arch": arch,
+    }
 
 
 def main() -> int:
@@ -208,6 +244,14 @@ def main() -> int:
     if target not in layers:
         jacobians.pop(target, None)
 
+    # Warn if the fitted layers miss the product band (server reads only band_layers).
+    b_lo, b_hi = _band(n)
+    in_band = [l for l in layers if b_lo <= l < b_hi]
+    if not in_band:
+        print(f"  NOTE: none of {sorted(layers)} fall in the server band [{b_lo},{b_hi}) -- the "
+              f"product (strip/heatmap/features) reads only band layers, so this lens serves "
+              f"NOTHING there. Fit within [{b_lo},{b_hi}) for a real drop-in.", flush=True)
+
     out = os.environ.get("JLENS_OUT") or str(ROOT / "out" / f"bootstrap-{len(layers)}L")
     sidecar = {
         "source_layers": sorted(layers),
@@ -217,12 +261,14 @@ def main() -> int:
         "skip_first": skip,
         "n_prompts": n_prompts,
         "chunk_size": int(os.environ.get("JLENS_CHUNK", 128)),
+        "band": [b_lo, b_hi],
+        "in_band_layers": sorted(in_band),
         "fit_kind": "bootstrap",
-        "arch": mt,
         "recipe": "hand-curated bootstrap (neutral chat + reasoning + safety-adjacent)",
         "fidelity": {str(l): rep["per_layer"][l] for l in layers if l in rep["per_layer"]},
         "fidelity_identity_ok": rep["identity_ok"],
         "note": "provisional first own-fit; production fit uses the full corpus + fidelity gate",
+        **_provenance(model_path, mt),
     }
     lenslib.save(jacobians, sidecar, out)
     print(f"saved lens -> {out}", flush=True)
