@@ -92,14 +92,27 @@ def main() -> int:
                           seed=recipe.seed, chat_templated=recipe.chat_templated,
                           on_policy_fraction=recipe.on_policy_fraction, positions=recipe.positions)
 
-    print(f"building corpus ({recipe.name}, n={recipe.n_prompts}, on_policy={recipe.on_policy_fraction})"
-          f" -- streaming + on-policy generation...", flush=True)
-    tc = time.perf_counter()
-    corpus = C.build_corpus(model, tokenizer, recipe,
-                            on_policy_max_tokens=int(os.environ.get("JLENS_ONPOLICY_TOKENS", 48)))
-    print(f"  corpus: {len(corpus.items)} items in {time.perf_counter()-tc:.1f}s  "
-          f"{corpus.provenance['strata']}  on_policy={sum(it.on_policy for it in corpus.items)}",
-          flush=True)
+    # Checkpoint dir: the serialized corpus + running J_sum live here so a killed fit RESUMES
+    # (skips on-policy generation + completed items) instead of losing everything.
+    out = os.environ.get("JLENS_OUT") or str(ROOT / "out" / f"band-{len(layers)}L")
+    ckpt_dir = os.path.join(out, "ckpt")
+    corpus_json = os.path.join(ckpt_dir, "corpus.json")
+
+    if os.path.exists(corpus_json):
+        corpus = C.Corpus.from_json(corpus_json)
+        print(f"RESUME: loaded {len(corpus.items)} corpus items from {corpus_json} "
+              f"(skipping build + on-policy generation)", flush=True)
+    else:
+        print(f"building corpus ({recipe.name}, n={recipe.n_prompts}, "
+              f"on_policy={recipe.on_policy_fraction}) -- streaming + on-policy generation...",
+              flush=True)
+        tc = time.perf_counter()
+        corpus = C.build_corpus(model, tokenizer, recipe,
+                                on_policy_max_tokens=int(os.environ.get("JLENS_ONPOLICY_TOKENS", 48)))
+        corpus.to_json(corpus_json)
+        print(f"  corpus: {len(corpus.items)} items in {time.perf_counter()-tc:.1f}s  "
+              f"{corpus.provenance['strata']}  on_policy={sum(it.on_policy for it in corpus.items)} "
+              f"(saved -> {corpus_json})", flush=True)
     tok_lens = [len(it.ids) for it in corpus.items]
     pos_lens = [len(it.positions) for it in corpus.items]
     print(f"  tok_len min/med/max={min(tok_lens)}/{sorted(tok_lens)[len(tok_lens)//2]}/{max(tok_lens)}"
@@ -109,6 +122,13 @@ def main() -> int:
           flush=True)
 
     def _progress(p):
+        if p.get("resumed") is True:
+            print(f"  RESUMED from checkpoint: {p['done']} item(s) done; continuing at "
+                  f"item {p['next_idx']+1}/{p['n_total']}", flush=True)
+            return
+        if p.get("resumed") is False:
+            print(f"  checkpoint not resumed: {p.get('reason')}", flush=True)
+            return
         if p["skipped"]:
             print(f"  item {p['i']+1}/{p['n_total']}: SKIPPED (no usable positions)", flush=True)
             return
@@ -119,7 +139,8 @@ def main() -> int:
 
     tf = time.perf_counter()
     jacobians, n_items = fit_corpus(model, corpus, source_layers=layers, adapter=ad,
-                                    target_layer=target, chunk_size=chunk, progress=_progress)
+                                    target_layer=target, chunk_size=chunk, progress=_progress,
+                                    checkpoint_dir=ckpt_dir)
     mx.eval(list(jacobians.values()))
     print(f"fit {time.perf_counter()-tf:.1f}s over {n_items} items  "
           f"peak={mx.get_peak_memory()/2**30:.1f}GB", flush=True)
@@ -152,7 +173,6 @@ def main() -> int:
                              capture_output=True, text=True, timeout=5).stdout.strip()
     except Exception:
         sha = ""
-    out = os.environ.get("JLENS_OUT") or str(ROOT / "out" / f"band-{len(layers)}L")
     model_id = os.path.basename(model_path.rstrip("/"))
     sidecar = {
         "source_layers": sorted(layers), "d_model": D, "final_logit_softcapping": ad.softcap,

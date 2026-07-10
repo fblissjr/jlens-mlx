@@ -152,9 +152,46 @@ def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter |
     return {l: acc[l] / n for l in layers}, n
 
 
+def _ckpt_paths(checkpoint_dir):
+    from pathlib import Path
+    d = Path(checkpoint_dir)
+    return d, d / "jsum.safetensors", d / "ckpt.json"
+
+
+def _ckpt_save(checkpoint_dir, jsum: dict, meta: dict) -> None:
+    """Atomically persist the running J_sum (safetensors) + meta (json). Written after each item
+    so a killed fit resumes instead of losing everything (the session/harness reaps background
+    children on teardown -- see the ops gotcha in the memory)."""
+    import json
+    import os
+    d, sf, js = _ckpt_paths(checkpoint_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    # mx.save_safetensors APPENDS ".safetensors" if absent -> the tmp name MUST already end in it,
+    # else the written file name won't match what we os.replace (a real bug the tests caught).
+    tmp_sf = str(d / f".jsum.{os.getpid()}.tmp.safetensors")
+    mx.save_safetensors(tmp_sf, {str(l): v.astype(mx.float32) for l, v in jsum.items()})
+    os.replace(tmp_sf, sf)                     # atomic swap into place
+    tmp_js = str(js) + f".tmp.{os.getpid()}"
+    with open(tmp_js, "w") as f:
+        json.dump(meta, f)
+    os.replace(tmp_js, js)
+
+
+def _ckpt_load(checkpoint_dir):
+    """Return (jsum {l: array}, meta) or (None, None) if absent."""
+    import json
+    _, sf, js = _ckpt_paths(checkpoint_dir)
+    if not (sf.exists() and js.exists()):
+        return None, None
+    meta = json.loads(js.read_text())
+    arrays = mx.load(str(sf))
+    jsum = {int(k): v for k, v in arrays.items()}
+    return jsum, meta
+
+
 def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = None,
                target_layer: int | None = None, chunk_size: int = CHUNK_SIZE_DEFAULT,
-               progress=None, use_chain: bool = True):
+               progress=None, use_chain: bool = True, checkpoint_dir=None, resume: bool = True):
     """Average `J_l` over a materialized `Corpus` (jlens_mlx.corpus), using each item's own
     role-aware position mask (assistant/think span for on-policy prompts, content span for
     human-text). Returns ({l: [D,D]}, n_items). The corpus provenance should be stamped onto
@@ -164,23 +201,51 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
     == direct on qwen3_5/gpt2) -- the big win for a dense band fit; set False for the direct baseline
     (e.g. an un-gated arch like gemma array-mask).
 
+    `checkpoint_dir` (recommended for long fits): after EACH item, atomically save the running J_sum
+    + progress. A killed fit resumes from there (skips completed items) when re-run with the SAME
+    corpus + `source_layers` + `target_layer` (the caller must pass the same materialized corpus --
+    serialize it alongside; see corpus.Corpus.to_json). Resume is refused (fresh start) if those
+    don't match. This is the robust alternative to detaching the process.
+
     `progress(info)` is called after each item (long deep-band fits are otherwise silent) with
     a dict: {i, n_total, done, skipped, seq_len, n_pos, on_policy, secs, elapsed, eta_secs}.
     `secs` is that item's fit time; `eta_secs` extrapolates from the mean so far."""
     import time
     ad = adapter or ModelAdapter(model)
     layers = sorted(int(l) for l in source_layers)
+    target = (ad.n_layers - 1) if target_layer is None else int(target_layer)
     _fit = _fit_one(use_chain)
-    acc: dict[int, mx.array] | None = None
-    n = 0
     n_total = len(corpus.items)
+
+    acc: dict[int, mx.array] | None = None
+    n = 0            # items that contributed to J_sum (the divisor)
+    start_idx = 0    # next item index to process
+    if checkpoint_dir and resume:
+        jsum, meta = _ckpt_load(checkpoint_dir)
+        if jsum is not None and meta is not None and meta.get("layers") == layers \
+                and meta.get("target") == target and meta.get("n_total") == n_total \
+                and meta.get("next_idx", 0) < n_total:
+            acc, n, start_idx = jsum, int(meta["n_done"]), int(meta["next_idx"])
+            if progress:
+                progress({"resumed": True, "next_idx": start_idx, "done": n, "n_total": n_total})
+        elif jsum is not None:
+            if progress:
+                progress({"resumed": False, "reason": "checkpoint incompatible -- starting fresh",
+                          "n_total": n_total})
+
     t_start = time.perf_counter()
     for i, item in enumerate(corpus.items):
+        if i < start_idx:
+            continue  # already done in a prior (killed) run
         t0 = time.perf_counter()
         try:
             per, _ = _fit(model, item.ids, layers, adapter=ad, target_layer=target_layer,
                           chunk_size=chunk_size, positions=item.positions)
         except ValueError:
+            if checkpoint_dir and acc is not None:
+                _ckpt_save(checkpoint_dir, acc, {"next_idx": i + 1, "n_done": n, "layers": layers,
+                                                 "target": target, "chunk_size": chunk_size,
+                                                 "use_chain": use_chain, "n_total": n_total})
             if progress:
                 progress({"i": i, "n_total": n_total, "done": n, "skipped": True,
                           "seq_len": len(item.ids), "n_pos": len(item.positions),
@@ -190,9 +255,13 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
         acc = dict(per) if acc is None else {l: acc[l] + per[l] for l in layers}
         mx.eval(list(acc.values()))
         n += 1
+        if checkpoint_dir:
+            _ckpt_save(checkpoint_dir, acc, {"next_idx": i + 1, "n_done": n, "layers": layers,
+                                             "target": target, "chunk_size": chunk_size,
+                                             "use_chain": use_chain, "n_total": n_total})
         if progress:
             elapsed = time.perf_counter() - t_start
-            eta = (elapsed / (i + 1)) * (n_total - i - 1)
+            eta = (elapsed / (i - start_idx + 1)) * (n_total - i - 1)
             progress({"i": i, "n_total": n_total, "done": n, "skipped": False,
                       "seq_len": len(item.ids), "n_pos": len(item.positions),
                       "on_policy": item.on_policy, "secs": time.perf_counter() - t0,

@@ -148,3 +148,21 @@ def test_recipe_defaults():
     r = Recipe(name="d")
     assert r.n_prompts == 300 and r.chat_templated and 0 <= r.on_policy_fraction <= 1
     assert isinstance(r.positions, PositionMask)
+
+
+def test_corpus_json_roundtrip(tmp_path):
+    # Serialize -> load must reproduce the items exactly (so a resumed fit reuses the same corpus,
+    # skipping on-policy regen and keeping checkpoint item-order aligned).
+    items = [CorpusItem([1, 2, 3, 4], [1, 2], "safety", True),
+             CorpusItem([5, 6], [0], "chat", False)]
+    c = Corpus(recipe=ABLITERATED_QWEN, items=items,
+               provenance={"recipe": "x", "strata": {"a:b:c": 2}})
+    p = tmp_path / "corpus.json"
+    c.to_json(p)
+    loaded = Corpus.from_json(p)
+    assert loaded.prompts_ids() == c.prompts_ids()
+    assert loaded.positions() == c.positions()
+    assert [it.stratum for it in loaded.items] == ["safety", "chat"]
+    assert [it.on_policy for it in loaded.items] == [True, False]
+    assert loaded.provenance == c.provenance
+    assert loaded.recipe.name == ABLITERATED_QWEN.name

@@ -87,6 +87,32 @@ class Corpus:
     def positions(self) -> list[list[int]]:
         return [it.positions for it in self.items]
 
+    def to_json(self, path) -> None:
+        """Serialize the materialized corpus (tokenized items + provenance) so a resumed fit
+        reuses the EXACT same items -- crucially skipping on-policy generation (GPU) on resume,
+        and guaranteeing the checkpoint's item order matches. Recipe params aren't needed to
+        re-fit, so only the recipe name is kept."""
+        import json
+        from pathlib import Path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "recipe_name": self.recipe.name,
+            "provenance": self.provenance,
+            "items": [{"ids": it.ids, "positions": it.positions, "stratum": it.stratum,
+                       "on_policy": it.on_policy} for it in self.items],
+        }
+        Path(path).write_text(json.dumps(payload))
+
+    @classmethod
+    def from_json(cls, path) -> "Corpus":
+        import json
+        from pathlib import Path
+        p = json.loads(Path(path).read_text())
+        items = [CorpusItem(it["ids"], it["positions"], it["stratum"], it["on_policy"])
+                 for it in p["items"]]
+        return cls(recipe=Recipe(name=p.get("recipe_name", "loaded")),
+                   items=items, provenance=p.get("provenance", {}))
+
 
 # --- Concrete recipes (from the HF-verified dataset study) ------------------------------------
 
