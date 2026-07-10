@@ -18,9 +18,13 @@ Last updated: 2026-07-10
 > context manager — the forward stays byte-identical to mlx-lm), plus the fa/ssm per-layer mask
 > dispatch. Verified vs `mx.vjp` (`scripts/check_qwen3_5_synthetic.py`): rel err ~3e-7, cos
 > 1.000000 incl. dg/dbeta. NOTE the accelerator only speeds each GDN layer's *backward*; the
-> outer fit is still `d_model` VJPs per source layer (Anthropic's estimator). Cotangent
-> dim-batching (in `generic_vjp.py`) is the missing production speedup — the GDN kernel already
-> supports it (`gdn_vjp_batched`), the generic driver does not yet.
+> outer fit is still `d_model` VJPs per source layer (Anthropic's estimator).
+>
+> **Dim-batching DONE (2026-07-10):** `generic_vjp.py` batches C output-dim rows through the tail's
+> native batch axis (C independent copies of the primal, one `mx.vjp` per chunk) — no `mx.vmap` over
+> the GDN `custom_function` needed. Verified batched J == chunk_size=1 J (rel 2e-7). Measured 2.4× at
+> chunk≥64 on the served 27B (same FLOPs; the win is GPU utilization). A further FLOP-reducing speedup
+> (the reference's analytic branch assembly) is still unported.
 
 The two design commitments that keep this from becoming a single-arch trainer with a
 mediocre hardcoded corpus.
