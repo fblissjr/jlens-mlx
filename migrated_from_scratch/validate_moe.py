@@ -5,7 +5,7 @@
 # a model-logits cross-check. No torch oracle (26B is too heavy) -- the MoE
 # capture point is already confirmed by mlx_vlm's own code (it matches HF's
 # Gemma4TextDecoderLayer hidden_states, the lens's fit convention).
-#   uv run python coderef/jspace_scratch/validate_moe.py
+#   uv run python migrated_from_scratch/validate_moe.py
 import os
 import numpy as np
 import mlx.core as mx

@@ -6,7 +6,7 @@ fit() and writes scripts/_xcheck_torch.npz; xcheck_fit_mlx.py fits on the SAME t
 compares.
 
 Run in a throwaway torch env (JLENS_SRC = path to the anthropics/jacobian-lens clone):
-    JLENS_SRC=<...>/coderef/jacobian-lens \
+    JLENS_SRC=<path-to-your-jacobian-lens-clone> \
     uv run --with torch --with transformers --with numpy --with safetensors \
            --with huggingface_hub python scripts/xcheck_fit_torch.py
 """

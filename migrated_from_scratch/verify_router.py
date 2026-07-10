@@ -2,13 +2,14 @@
 # using the REAL heylook_llm.jspace.features module + the shipped e4b weights.
 # Validates router_feature_vector + FeatureNormalizer + HallucinationRouter
 # against the reference pipeline (analyze_router.py).
-#   uv run python coderef/jspace_scratch/verify_router.py
+#   uv run python migrated_from_scratch/verify_router.py
 import glob, json, os
 import numpy as np
 from heylook_llm.jspace.features import (
     HallucinationRouter, FeatureNormalizer, router_feature_vector, BASELINE_FEATURES)
 
-HUB = os.path.expanduser("~/.huggingface/hub/models--solarkyle--jspace-lenses/snapshots")
+# $HF_HOME = your local HF cache (contains hub/models--...); no home path baked in.
+HUB = os.path.join(os.environ["HF_HOME"], "hub/models--solarkyle--jspace-lenses/snapshots")
 trace = glob.glob(f"{HUB}/*/traces/uncertainty_trivia_gemma-4-e4b-it.jsonl")[0]
 router_json = glob.glob(f"{HUB}/*/router/workspace_router_e4b.json")[0]
 

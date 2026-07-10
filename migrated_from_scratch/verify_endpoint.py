@@ -1,7 +1,7 @@
 # End-to-end check of the analyze() pipeline (format_prompt chat-template +
 # greedy gen + registry lens + readout) on the served 26B MoE, through the REAL
 # module code the endpoint calls.
-#   uv run python coderef/jspace_scratch/verify_endpoint.py
+#   uv run python migrated_from_scratch/verify_endpoint.py
 import os
 os.environ["HEYLOOK_JSPACE_DIR"] = os.path.expanduser(
     "adapters/jspace")

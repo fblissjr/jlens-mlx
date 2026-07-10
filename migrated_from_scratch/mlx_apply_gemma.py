@@ -1,6 +1,6 @@
 # V2: MLX apply for gemma (RMSNorm + sqrt(d) embed + final_logit_softcapping)
 # vs the torch oracle. Project venv. Reuses oracle input_ids.
-#   uv run python coderef/jspace_scratch/mlx_apply_gemma.py
+#   uv run python migrated_from_scratch/mlx_apply_gemma.py
 import os, json, glob
 import numpy as np
 import mlx.core as mx

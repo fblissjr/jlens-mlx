@@ -1,8 +1,8 @@
 # V0/V2 golden oracle + lens converter (runs in throwaway torch venv).
-# Uses the genuine jlens (user-provided coderef/jacobian-lens clone) for
+# Uses the genuine jlens (a user-provided jacobian-lens clone) for
 # authoritative lens_logits. Parameterized by env:
 #   HF_MODEL  (default openai-community/gpt2)
-#   LENS_PT   (default: local neuronpedia gpt2 lens)
+#   LENS_PT   (path to the lens .pt; else resolved under $HF_HOME/hub)
 #   PREFIX    (default gpt2)      -> lens_<PREFIX>.safetensors, oracle_<PREFIX>_<slug>.npz
 #   JSPACE_OUT (output dir)
 import os, glob, json
@@ -14,8 +14,9 @@ from jlens.hooks import ActivationRecorder
 from safetensors.torch import save_file
 
 HF = os.environ.get("HF_MODEL", "openai-community/gpt2")
-LENS = os.environ.get("LENS_PT") or glob.glob(os.path.expanduser(
-    "~/.huggingface/hub/models--neuronpedia--jacobian-lens/snapshots/*/"
+LENS = os.environ.get("LENS_PT") or glob.glob(os.path.join(
+    os.environ["HF_HOME"],   # set HF_HOME to your local HF cache, or pass LENS_PT
+    "hub/models--neuronpedia--jacobian-lens/snapshots/*/"
     "gpt2-small/jlens/Salesforce-wikitext/gpt2_jacobian_lens.pt"))[0]
 PREFIX = os.environ.get("PREFIX", "gpt2")
 OUT = os.environ.get("JSPACE_OUT") or os.path.join(os.environ["TMPDIR"], "jspace_oracle")

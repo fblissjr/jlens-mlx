@@ -1,6 +1,6 @@
 # V1: MLX apply + residual capture, compared against the V0 torch oracle.
 # Runs in the PROJECT venv (mlx-lm). Reuses oracle input_ids (no tokenizer drift).
-#   uv run python coderef/jspace_scratch/mlx_apply.py
+#   uv run python migrated_from_scratch/mlx_apply.py
 import os, json, glob
 import numpy as np
 import mlx.core as mx

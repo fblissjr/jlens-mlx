@@ -1,7 +1,7 @@
 # End-to-end check: the REAL heylook_llm.jspace module vs the torch oracle
 # fixtures (V1 gpt2 + V2 gemma-2-2b). Proves the committed module -- not the
 # ad-hoc spike scripts -- reproduces cos~1.0 parity.
-#   uv run python coderef/jspace_scratch/verify_module.py
+#   uv run python migrated_from_scratch/verify_module.py
 import os, glob
 import numpy as np
 import mlx.core as mx
