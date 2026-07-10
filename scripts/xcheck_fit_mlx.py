@@ -41,7 +41,8 @@ def main() -> int:
     target = int(d["target"])
     n_prompts = sum(1 for k in d.files if k.startswith("ids_"))
 
-    model, _ = load("openai-community/gpt2")
+    model_id = str(d["model"]) if "model" in d.files else "openai-community/gpt2"
+    model, _ = load(model_id)
     model.update(tree_map(lambda p: p.astype(mx.float32) if isinstance(p, mx.array) else p,
                           model.parameters()))
     mx.eval(model.parameters())

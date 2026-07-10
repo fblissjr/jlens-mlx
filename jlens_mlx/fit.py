@@ -7,9 +7,10 @@ factors and NO closed-form norm seed — the final norm stays OUTSIDE J and is a
 real module at decode (jlens_mlx.lens.JSpaceLens.apply, mirroring the heylook server). This
 mirrors anthropics/jacobian-lens fitting.py and is correct-by-construction.
 
-The tail runner (make_tail) is the only arch-specific piece; the default handles
-gpt2/llama-style blocks `block(h, mask, cache)`. qwen3_5 (GDN hybrid) needs its own runner
-(fa/ssm masks + is_linear dispatch) — the deferred accelerator (providers/qwen3_5_gdn).
+The tail runner (make_tail) is the only arch-specific piece. It builds the causal mask the
+model's own forward uses: the "causal" STRING for SDPA-path archs (gpt2/llama), or an ARRAY
+mask for archs whose attention reads `mask.dtype` (gemma*, which use a manual softcapped score
+path). qwen3_5 (GDN hybrid) needs its own tail — the deferred accelerator (providers/qwen3_5_gdn).
 """
 from __future__ import annotations
 
@@ -22,26 +23,41 @@ from .providers.generic_vjp import jacobian_via_vjp
 #: 128-token prompts; scale down for short prompts.
 SKIP_FIRST_DEFAULT = 16
 
+#: Architectures whose attention reads `mask.dtype` (a manual score path, e.g. softcapped
+#: attention) and so require an ARRAY causal mask, not the "causal" string that SDPA-path
+#: models accept. gpt2/llama stay on the string mask, so their verified parity is untouched.
+_ARRAY_MASK_ARCHS = {"gemma2", "gemma3", "gemma3_text", "gemma"}
+
 
 def valid_positions(seq_len: int, skip_first: int = SKIP_FIRST_DEFAULT) -> list[int]:
     """Positions [skip_first, seq_len-1): skip attention sinks + the last position (no
-    next-token target). Mirrors Anthropic's valid_position_mask; clamps on short prompts
-    so at least one position remains."""
-    lo = skip_first if seq_len - 1 > skip_first else max(0, seq_len - 2)
-    return list(range(lo, seq_len - 1)) or [max(0, seq_len - 2)]
+    next-token target). Clamps to a single position on short prompts. Requires seq_len >= 2."""
+    if seq_len < 2:
+        raise ValueError(f"prompt too short (seq_len={seq_len}); need >= 2 tokens to fit")
+    lo = skip_first if seq_len - 1 > skip_first else seq_len - 2
+    return list(range(lo, seq_len - 1)) or [seq_len - 2]
+
+
+def _model_type(adapter: ModelAdapter) -> str:
+    for obj in (adapter.model, getattr(adapter.model, "args", None),
+                getattr(adapter.model, "config", None), adapter.inner):
+        mt = getattr(obj, "model_type", None)
+        if isinstance(mt, str):
+            return mt
+    return ""
 
 
 def make_tail(adapter: ModelAdapter, start: int, end: int):
-    """fn(h[1,S,D]) -> [1,S,D] running decoder blocks [start, end).
-
-    Default runner for gpt2/llama-style blocks `block(h, mask, cache)`. For start >= end
+    """fn(h[1,S,D]) -> [1,S,D] running decoder blocks [start, end) with the model's own
+    causal mask type (array for gemma*, "causal" string for gpt2/llama). For start >= end
     (l == target) it is the identity, so J = I. qwen3_5/GDN needs its own runner."""
     from mlx_lm.models.base import create_attention_mask
 
     blocks = adapter.layers
+    array_mask = _model_type(adapter) in _ARRAY_MASK_ARCHS
 
     def tail(h: mx.array) -> mx.array:
-        mask = create_attention_mask(h, cache=None)
+        mask = create_attention_mask(h, cache=None, return_array=array_mask)
         for i in range(start, end):
             h = blocks[i](h, mask, cache=None)
         return h
@@ -55,21 +71,32 @@ def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None 
     Returns ({l: [D,D]}, seq_len)."""
     ad = adapter or ModelAdapter(model)
     n = ad.n_layers
-    target = (n - 1) if target_layer is None else (int(target_layer) % n)
+    if target_layer is None:
+        target = n - 1
+    else:
+        target = int(target_layer)
+        if target < 0:
+            target += n
+        if not (0 <= target < n):
+            raise ValueError(f"target_layer {target_layer} out of range for {n} layers")
+    layers = [int(l) for l in source_layers]
+    for l in layers:
+        if not (0 <= l <= target):
+            raise ValueError(f"source layer {l} must be in [0, target={target}]")
+
     ids = list(input_ids)
-    S = len(ids)
-    acts = capture_residuals(model, ids, list(range(n)), adapter=ad)  # {l: [S, D]}
-    valid = mx.array(valid_positions(S, skip_first))
+    valid = mx.array(valid_positions(len(ids), skip_first))
+    acts = capture_residuals(model, ids, layers, adapter=ad)  # only the source layers
     out = {}
-    for l in source_layers:
-        tail = make_tail(ad, int(l) + 1, target + 1)       # blocks l+1..target; l==target -> identity
-        out[int(l)] = jacobian_via_vjp(tail, acts[int(l)][None], valid)
-    return out, S
+    for l in layers:
+        tail = make_tail(ad, l + 1, target + 1)  # blocks l+1..target; l == target -> identity
+        out[l] = jacobian_via_vjp(tail, acts[l][None], valid)
+    return out, len(ids)
 
 
 def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter | None = None,
              target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT):
-    """Average `J_l` over `prompts` (a running mean). `tokenize(prompt) -> list[int]`.
+    """Average `J_l` over `prompts` (a running sum divided once). `tokenize(prompt) -> list[int]`.
     Returns ({l: [D,D]}, n_prompts). Save with jlens_mlx.lens.save."""
     ad = adapter or ModelAdapter(model)
     layers = sorted(int(l) for l in source_layers)
@@ -78,7 +105,9 @@ def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter |
     for p in prompts:
         per, _ = fit_prompt(model, tokenize(p), layers, adapter=ad,
                             target_layer=target_layer, skip_first=skip_first)
-        acc = per if acc is None else {l: acc[l] + per[l] for l in layers}
+        acc = dict(per) if acc is None else {l: acc[l] + per[l] for l in layers}
         mx.eval(list(acc.values()))
         n += 1
+    if not n:
+        raise ValueError("fit_lens: no prompts provided")
     return {l: acc[l] / n for l in layers}, n

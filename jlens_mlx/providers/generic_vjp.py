@@ -37,6 +37,6 @@ def jacobian_via_vjp(fn, h, valid):
         _, g = mx.vjp(fn, [h], [cot])
         grad = g[0][0]                                           # [S, D]
         rows.append(grad[valid].astype(mx.float32).mean(axis=0))  # avg over valid source pos
-        if (d & 127) == 0:
+        if d and (d & 127) == 0:
             mx.eval(rows)                                        # bound graph/memory growth
     return mx.stack(rows)                                        # [D, D], row d = output dim

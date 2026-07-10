@@ -23,17 +23,19 @@ from jlens.hf import from_hf  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
 OUT = Path(__file__).resolve().parent / "_xcheck_torch.npz"
+MODEL = os.environ.get("MODEL", "openai-community/gpt2")  # id or local snapshot path
 PROMPTS = ["The Eiffel Tower is in the city of", "The capital of Japan is"]
-SRC = [9, 10]
-SKIP_FIRST = 1
-MAX_SEQ = 64
+SRC = [int(x) for x in os.environ.get("SRC", "9,10").split(",")]
+SKIP_FIRST = int(os.environ.get("SKIP_FIRST", "1"))
+FORCE_BOS = os.environ.get("FORCE_BOS", "0") == "1"  # gemma needs BOS; gpt2 does not
+MAX_SEQ = int(os.environ.get("MAX_SEQ", "64"))
 
 
 def main() -> None:
     torch.manual_seed(0)
-    hf = AutoModelForCausalLM.from_pretrained("gpt2", torch_dtype=torch.float32).eval().to("cpu")
-    tok = AutoTokenizer.from_pretrained("gpt2")
-    model = from_hf(hf, tok, force_bos=False, compile=False)  # no BOS -> matches mx tokenize
+    hf = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.float32).eval().to("cpu")
+    tok = AutoTokenizer.from_pretrained(MODEL)
+    model = from_hf(hf, tok, force_bos=FORCE_BOS, compile=False)
     lens = fit(model, PROMPTS, source_layers=SRC, target_layer=None,
                skip_first=SKIP_FIRST, max_seq_len=MAX_SEQ, dim_batch=8, checkpoint_path=None)
 
@@ -43,6 +45,7 @@ def main() -> None:
     data["src"] = np.array(SRC)
     data["skip_first"] = np.array(SKIP_FIRST)
     data["target"] = np.array(model.n_layers - 1)
+    data["model"] = np.array(MODEL)
     np.savez(OUT, **data)
 
     print(f"torch fit done -> {OUT}")
