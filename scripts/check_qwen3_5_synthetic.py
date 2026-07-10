@@ -32,8 +32,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import jlens_mlx.providers.qwen3_5_gdn as gdn  # noqa: E402
+from jlens_mlx import lens as lenslib  # noqa: E402
+from jlens_mlx import verify  # noqa: E402
 from jlens_mlx.capture import ModelAdapter  # noqa: E402
-from jlens_mlx.fit import _model_type, fit_prompt, make_tail  # noqa: E402
+from jlens_mlx.fit import _model_type, fit_lens, fit_prompt, make_tail  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -192,6 +194,34 @@ def check_dim_batching(model, ad) -> None:
     check("batched == unbatched", err < 1e-5, f"max_rel_err={err:.2e}")
 
 
+def check_fidelity_gate(model, ad) -> None:
+    """[5] the held-out fidelity gate: the identity/target layer MUST reproduce the
+    model's true logits (top1==1.0, KL~0). A correctness tripwire for the whole
+    capture->transport->real-head path, plus that the gate wiring runs."""
+    print("[5] fidelity gate: identity layer reproduces true logits")
+    n = ad.n_layers
+    target = n - 1
+    fit_ids = [[2, 6, 10, 14, 18, 22, 26, 30], [3, 7, 11, 15, 19, 23, 27, 31]]
+    held = [[5, 9, 13, 17, 21, 25, 29, 33]]
+
+    def tok(x):
+        return list(x)
+
+    jac, npr = fit_lens(model, fit_ids, source_layers=[target - 2, target],
+                        tokenize=tok, adapter=ad, target_layer=target, skip_first=1)
+    lens = lenslib.JSpaceLens(jac, [target - 2, target], ad.layers[0].input_layernorm.weight.shape[0],
+                              softcap=ad.softcap, meta={"target_layer": target})
+    rep = verify.fidelity_gate(model, lens, held, tokenize=tok, adapter=ad, skip_first=1, top_k=5)
+    pl = rep["per_layer"]
+    id_top1 = pl[target]["top1"]
+    id_kl = pl[target]["kl"]
+    check("identity layer exact", rep["identity_ok"] is True,
+          f"target top1={id_top1:.4f} kl={id_kl:.2e} (must be 1.0 / ~0)")
+    early = pl[target - 2]
+    check("gate reports early layer", all(k in early for k in ("top1", "topk", "kl")),
+          f"J_{target-2}: top1={early['top1']:.3f} topk={early['topk']:.3f} kl={early['kl']:.3f}")
+
+
 def main() -> int:
     mx.random.seed(0)
     metal = mx.metal.is_available()
@@ -211,6 +241,7 @@ def main() -> int:
     check_forward_parity(model, ad)
     check_fit_parity(model, ad)
     check_dim_batching(model, ad)
+    check_fidelity_gate(model, ad)
 
     print(f"\nQWEN3_5 GDN GATE {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
     return 0 if not FAILURES else 1
