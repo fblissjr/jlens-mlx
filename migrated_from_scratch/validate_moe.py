@@ -14,7 +14,7 @@ from heylook_llm.jspace import JSpaceLens, ModelAdapter, capture_residuals
 from heylook_llm.jspace.features import band_layers
 
 OUT = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.expanduser("~/Storage/llms/google/gemma-4-26b-a4b-it-8bit-mlx")
+MODEL_PATH = os.path.expanduser("gemma-4-26b-a4b-it-8bit-mlx")
 
 lens = JSpaceLens.from_files(os.path.join(OUT, "lens_gemma4moe.safetensors"),
                              os.path.join(OUT, "lens_gemma4moe.sidecar.json"))

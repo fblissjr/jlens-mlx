@@ -4,14 +4,14 @@
 #   uv run python coderef/jspace_scratch/verify_endpoint.py
 import os
 os.environ["HEYLOOK_JSPACE_DIR"] = os.path.expanduser(
-    "~/workspace/heylookitsanllm/adapters/jspace")
+    "adapters/jspace")
 
 from mlx_vlm.utils import load as vlm_load
 from heylook_llm.jspace.registry import LensRegistry
 from heylook_llm.jspace.analyze import analyze
 
 MODEL_ID = "gemma-4-26b-a4b-it-8bit-mlx"
-MODEL_PATH = os.path.expanduser("~/Storage/llms/google/gemma-4-26b-a4b-it-8bit-mlx")
+MODEL_PATH = os.path.expanduser("gemma-4-26b-a4b-it-8bit-mlx")
 
 
 class Provider:

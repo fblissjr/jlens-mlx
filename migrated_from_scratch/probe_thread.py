@@ -1,6 +1,6 @@
 # Find the exact MLX op that hits the missing CPU stream on a worker thread.
 import os
-os.environ["HEYLOOK_JSPACE_DIR"] = os.path.expanduser("~/workspace/heylookitsanllm/adapters/jspace")
+os.environ["HEYLOOK_JSPACE_DIR"] = os.path.expanduser("adapters/jspace")
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import mlx.core as mx
@@ -9,7 +9,7 @@ from heylook_llm.jspace.capture import ModelAdapter, capture_residuals
 from heylook_llm.jspace.registry import LensRegistry
 from heylook_llm.providers.common.generation_core import _get_generation_stream
 
-MODEL_PATH = os.path.expanduser("~/Storage/llms/google/gemma-4-26b-a4b-it-8bit-mlx")
+MODEL_PATH = os.path.expanduser("gemma-4-26b-a4b-it-8bit-mlx")
 model, processor = vlm_load(MODEL_PATH)
 lens = LensRegistry.from_env().get("gemma-4-26b-a4b-it-8bit-mlx")
 ids = [2, 785, 30772, 8563, 374, 7407, 304, 279, 3283, 315]  # arbitrary
