@@ -107,6 +107,11 @@ def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None 
         valid = mx.array(valid_positions(len(ids), skip_first))
     acts = capture_residuals(model, ids, layers, adapter=ad)  # only the source layers
     out = {}
+    # NOTE: this fits each layer with its OWN full-tail VJP -- O(n_source * avg_tail) block passes,
+    # the cost wall for a dense band fit. `jlens_mlx.chain.fit_prompt_chain` is a drop-in that fits
+    # ALL layers in one backward sweep (O(n_blocks)) and is meant to be equal to this -- but it is
+    # UNVERIFIED ON GPU: run `scripts/check_chain_vs_direct.py` before switching to it. This direct
+    # path stays the trusted default until that gate is green.
     for l in layers:
         tail = make_tail(ad, l + 1, target + 1)  # blocks l+1..target; l == target -> identity
         out[l] = jacobian_via_vjp(tail, acts[l][None], valid, chunk_size=chunk_size)
