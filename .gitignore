@@ -244,3 +244,6 @@ migrated_from_scratch/*.safetensors
 # OS / editor
 .DS_Store
 >>>>>>> d0a980b (chore: scaffold jlens-mlx (modular MLX Jacobian-lens fitting))
+
+# Fit output artifacts (lenses, logs) -- local only
+out/

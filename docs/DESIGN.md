@@ -12,6 +12,15 @@ Last updated: 2026-07-10
 > heylook `docs/jspace_integration_plan.md` Part 2; this file will be rewritten to match.
 > The GDN Metal kernel is now an *optional* speed accelerator, not the core, and is not
 > vendored.
+>
+> **GDN tail DONE (2026-07-10):** `providers/qwen3_5_gdn.py` ports the jlens-qwen36 Metal GDN
+> backward as an `mx.custom_function` VJP over the STOCK fused forward (swapped via a reentrant
+> context manager — the forward stays byte-identical to mlx-lm), plus the fa/ssm per-layer mask
+> dispatch. Verified vs `mx.vjp` (`scripts/check_qwen3_5_synthetic.py`): rel err ~3e-7, cos
+> 1.000000 incl. dg/dbeta. NOTE the accelerator only speeds each GDN layer's *backward*; the
+> outer fit is still `d_model` VJPs per source layer (Anthropic's estimator). Cotangent
+> dim-batching (in `generic_vjp.py`) is the missing production speedup — the GDN kernel already
+> supports it (`gdn_vjp_batched`), the generic driver does not yet.
 
 The two design commitments that keep this from becoming a single-arch trainer with a
 mediocre hardcoded corpus.
