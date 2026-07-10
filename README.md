@@ -37,11 +37,14 @@ committed under `tests/`.
 
 ## Status
 
-**Scaffold (2026-07-10).** Structure, design, and attribution are in place; the
-`qwen3_5` fitting core is **vendored verbatim** from `WeZZard/jlens-qwen36` under
-[`vendor/jlens_qwen36/`](vendor/jlens_qwen36/) as the porting seed. The modular package
-(`jlens_mlx/`) defines the contracts; wiring the seed into it is the next work — see
-[`MIGRATION.md`](MIGRATION.md).
+**Scaffold + apply path GREEN (2026-07-10).** The ported apply path reproduces the reference
+oracle on gpt2 (V1 parity, cos 1.00000; `scripts/check_gpt2_parity.py`). The fitter follows
+**Anthropic's `jacobian-lens`** — direct end-to-end autograd (`mx.vjp` on MLX), the norm kept
+*outside* `J` and applied as the real module at decode — see [`docs/DESIGN.md`](docs/DESIGN.md).
+
+We do **not** vendor jlens-qwen36. We port specific pieces (verified vs `mx.vjp`, attributed
+per-file); its only role is an *optional* GDN speed kernel for the 27B qwen. Reference clones
+(`jacobian-lens`, `jlens-qwen36`, `jspace`) live outside this repo. Next work: [`MIGRATION.md`](MIGRATION.md).
 
 ## Layout
 
@@ -52,9 +55,9 @@ jlens_mlx/
   corpus.py           # Recipe + PositionMask + on-policy corpus builder (swappable, provenance-stamped)
   lens.py             # save/load safetensors + sidecar; transport + unembed (apply, mirrors the server)
   verify.py           # parity vs mx.vjp / oracle; held-out per-layer fidelity gate; lens diffing
-vendor/jlens_qwen36/  # verbatim Apache-2.0 seed (GDN Metal backward + analytic assembly) — to be modularized
 migrated_from_scratch/# the heylook Phase-1 verifier spike, relocated here
-docs/DESIGN.md        # the modular fitter + corpus design
+scripts/              # verification gates (check_gpt2_parity, check_rmsnorm_seed, ...)
+docs/DESIGN.md        # the fitter + corpus design
 ```
 
 ## Attribution

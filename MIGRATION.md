@@ -2,7 +2,15 @@
 
 Last updated: 2026-07-10
 
-How this repo gets from "scaffold + vendored seed" to "fits our own lens."
+> **PIVOT NOTE (2026-07-10):** the vendored seed was REMOVED (owner preference + a bug we
+> caught in it). The fitter now ports from **Anthropic's `jacobian-lens`** (direct
+> end-to-end `mx.vjp`, norm outside `J`), not from jlens-qwen36's chain. §2 below (which
+> talks about modularizing a vendored seed) is superseded — the new step 2 is "port
+> Anthropic's `fitting.py` autograd loop to `mx.vjp`". jlens-qwen36's GDN Metal kernel is an
+> optional, later, *ported-not-vendored* speed accelerator. §1 (scratch relocation), §3–§5
+> still stand. Reference clones live in a sibling `coderef/`, not in this repo.
+
+How this repo gets from scaffold to "fits our own lens."
 
 ## 1. Relocated Phase-1 spike (`migrated_from_scratch/`)
 

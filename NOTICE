@@ -1,27 +1,33 @@
 jlens-mlx
 Copyright 2026 the jlens-mlx authors
 
-This product includes software and derives from the following projects:
+This project PORTS (adapts) specific pieces from the projects below — it does NOT
+vendor verbatim copies. Ported code carries a per-file provenance header naming its
+origin, and each port is verified against ground truth (mx.vjp / a reference oracle).
 
-1. anthropics/jacobian-lens (Apache License 2.0)
-   The reference Jacobian-lens implementation and the paper
-   "Verbalizable Representations Form a Global Workspace in Language Models".
-   Used via the fork github.com/fblissjr/jacobian-lens.
-   Lens apply semantics, the chain convention (J_{l-1} = J_l . M_l), and the
-   fit corpus/position handling derive from this work.
+1. anthropics/jacobian-lens (Apache License 2.0) — THE PRIMARY FITTING REFERENCE.
+   The reference Jacobian-lens implementation and the paper "Verbalizable
+   Representations Form a Global Workspace in Language Models". Its torch-autograd fit
+   loop (fitting.py) is translated to mx.vjp; its design is adopted directly — the
+   norm kept OUTSIDE J and applied as the real module at decode, and the chain-free
+   end-to-end per-layer Jacobian. Used via the fork github.com/fblissjr/jacobian-lens.
 
-2. WeZZard/jlens-qwen36 (Apache License 2.0)
-   MLX on-device fitting for the qwen3_5 (Gated-DeltaNet hybrid) architecture:
-   the custom Metal GDN backward kernel and the analytic branch-Jacobian
-   assembly. The contents of vendor/jlens_qwen36/ are copied verbatim from this
-   project as a porting seed; modifications are tracked as they are modularized
-   into jlens_mlx/ (see MIGRATION.md). Per-file provenance headers name the
-   origin.
+2. WeZZard/jlens-qwen36 (Apache License 2.0) — one optional piece only.
+   MLX on-device fitting for the qwen3_5 (Gated-DeltaNet hybrid) architecture. Its
+   role here is a single optional accelerator — the custom Metal GDN backward kernel +
+   analytic branch-Jacobian assembly — which we PORT into jlens_mlx/ only when the
+   direct-VJP baseline is too slow on the 27B, verified vs mx.vjp and attributed.
+   NOT vendored. (Note: its closed-form RMSNorm-Jacobian has an rms**2/rms**3 bug we
+   caught and avoid — see the plan's observations.)
 
-3. Neuronpedia (MIT) — design inspiration only, no code.
-   The production interp platform (neuronpedia.org/jlens). The model-agnostic
-   provider posture, the customizable-corpus stance, the layer-range navigation,
-   and the steer/swap/ablate intervention design informed this project's
-   direction. No Neuronpedia code is included.
+3. solarkyle/jspace (Apache License 2.0) — research/asset reference, not a dependency.
+   A same-day replication built on the Anthropic reference; the origin of pre-fit
+   lenses (solarkyle/jspace-lenses) and the hallucination-router design. Source of
+   downstream analysis ideas (hallucination anatomy, lie detection, uncertainty probes).
 
-Each vendored file retains its upstream copyright and license notice.
+4. Neuronpedia (MIT) — design inspiration only, no code. The production interp
+   platform; the model-agnostic apply/decode contract (real final norm + config
+   softcap + matmul-only transport) and the layer-navigation / intervention UX
+   informed this project's direction.
+
+Reference clones live outside this repo (a sibling coderef/ directory), not committed here.

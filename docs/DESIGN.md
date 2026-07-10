@@ -2,6 +2,17 @@
 
 Last updated: 2026-07-10
 
+> **PIVOT NOTE (2026-07-10):** §1 below describes the original jlens-qwen36-style
+> *chain* design (`J_{l-1} = J_l · M_l` + closed-form norm seed). We have since PIVOTED
+> to **Anthropic's `jacobian-lens` design**: fit each `J_l` as a **direct end-to-end
+> `mx.vjp`** (autograd, no chain), with the **norm kept OUTSIDE `J`** and applied as the
+> real module at decode — which is correct-by-construction and designs away both the
+> `rms²`-seed bug and the chain-indexing off-by-one we caught in jlens-qwen36. §2 (corpus)
+> and §3 (vision) still stand. The authoritative statement is "The modular fitter" in the
+> heylook `docs/jspace_integration_plan.md` Part 2; this file will be rewritten to match.
+> The GDN Metal kernel is now an *optional* speed accelerator, not the core, and is not
+> vendored.
+
 The two design commitments that keep this from becoming a single-arch trainer with a
 mediocre hardcoded corpus.
 
