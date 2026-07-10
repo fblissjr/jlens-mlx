@@ -76,9 +76,11 @@ def make_tail(adapter: ModelAdapter, start: int, end: int):
 
 def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None = None,
                target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT,
-               chunk_size: int = CHUNK_SIZE_DEFAULT):
+               chunk_size: int = CHUNK_SIZE_DEFAULT, positions=None):
     """Per-prompt `J_l = d(acts[target])/d(acts[l])` via mx.vjp of blocks[l+1..target].
-    `chunk_size` is the output-dim batch per VJP (see providers.generic_vjp).
+    `chunk_size` is the output-dim batch per VJP (see providers.generic_vjp). `positions`
+    overrides the default valid_positions mask (e.g. a corpus role-aware mask); positions
+    are clamped to the sequence and the last index is dropped (no next-token target).
     Returns ({l: [D,D]}, seq_len)."""
     ad = adapter or ModelAdapter(model)
     n = ad.n_layers
@@ -96,7 +98,13 @@ def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None 
             raise ValueError(f"source layer {l} must be in [0, target={target}]")
 
     ids = list(input_ids)
-    valid = mx.array(valid_positions(len(ids), skip_first))
+    if positions is not None:
+        vp = sorted({p for p in positions if 0 <= p < len(ids) - 1})
+        if not vp:
+            raise ValueError("no valid positions after clamping to the sequence")
+        valid = mx.array(vp)
+    else:
+        valid = mx.array(valid_positions(len(ids), skip_first))
     acts = capture_residuals(model, ids, layers, adapter=ad)  # only the source layers
     out = {}
     for l in layers:
@@ -124,4 +132,28 @@ def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter |
         n += 1
     if not n:
         raise ValueError("fit_lens: no prompts provided")
+    return {l: acc[l] / n for l in layers}, n
+
+
+def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = None,
+               target_layer: int | None = None, chunk_size: int = CHUNK_SIZE_DEFAULT):
+    """Average `J_l` over a materialized `Corpus` (jlens_mlx.corpus), using each item's own
+    role-aware position mask (assistant/think span for on-policy prompts, content span for
+    human-text). Returns ({l: [D,D]}, n_items). The corpus provenance should be stamped onto
+    the lens sidecar. Items whose positions all fall outside their sequence are skipped."""
+    ad = adapter or ModelAdapter(model)
+    layers = sorted(int(l) for l in source_layers)
+    acc: dict[int, mx.array] | None = None
+    n = 0
+    for item in corpus.items:
+        try:
+            per, _ = fit_prompt(model, item.ids, layers, adapter=ad, target_layer=target_layer,
+                                chunk_size=chunk_size, positions=item.positions)
+        except ValueError:
+            continue  # no usable positions for this item
+        acc = dict(per) if acc is None else {l: acc[l] + per[l] for l in layers}
+        mx.eval(list(acc.values()))
+        n += 1
+    if not n:
+        raise ValueError("fit_corpus: no items produced a usable fit")
     return {l: acc[l] / n for l in layers}, n
