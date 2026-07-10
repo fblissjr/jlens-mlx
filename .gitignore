@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -216,3 +217,30 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+=======
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Lens weights + fit artifacts are large (0.5-3 GB) -> HuggingFace, never git.
+*.safetensors
+*.npz
+*.pt
+/lenses/
+/data/
+/corpus_cache/
+
+# The relocated Phase-1 spike carries binary fixtures + lenses; keep the code,
+# ignore its data (the *.safetensors/*.npz rules above already cover them).
+migrated_from_scratch/*.npz
+migrated_from_scratch/*.safetensors
+
+# OS / editor
+.DS_Store
+>>>>>>> d0a980b (chore: scaffold jlens-mlx (modular MLX Jacobian-lens fitting))
