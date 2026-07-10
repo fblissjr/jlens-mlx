@@ -1,26 +1,12 @@
-"""Per-architecture Jacobian providers, resolved by model_type.
+"""The VJP fit primitive + the deferred per-arch accelerators.
 
-Register accelerators in _register(). The default -- for any model_type without a
-registered accelerator -- is GenericVjpProvider, which works on any differentiable
-MLX model (slow, no custom kernel).
+The direct-VJP baseline (jlens_mlx.fit + jacobian_via_vjp) is arch-agnostic; the only
+per-arch piece is the "tail runner" (how to run decoder blocks with the right masks), whose
+default lives in fit.make_tail. qwen3_5 (GDN hybrid) will get a faster accelerator (a Metal
+GDN backward kernel + a GDN-aware tail) — see qwen3_5_gdn (deferred).
 """
 from __future__ import annotations
 
-from ..fit import PROVIDER_REGISTRY
+from .generic_vjp import jacobian_via_vjp
 
-
-def get_provider(model_type: str):
-    """Return an accelerator provider for `model_type`, else GenericVjpProvider."""
-    from .generic_vjp import GenericVjpProvider
-
-    cls = PROVIDER_REGISTRY.get(model_type)
-    return cls() if cls is not None else GenericVjpProvider()
-
-
-def _register() -> None:
-    from .qwen3_5_gdn import Qwen35GdnProvider
-
-    PROVIDER_REGISTRY["qwen3_5"] = Qwen35GdnProvider
-
-
-_register()
+__all__ = ["jacobian_via_vjp"]

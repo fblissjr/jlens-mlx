@@ -1,73 +1,84 @@
-"""Generic, architecture-agnostic Jacobian-lens fitting driver.
+"""Direct end-to-end Jacobian-lens fitting — Anthropic jacobian-lens design, ported to MLX.
 
-Fitting decomposes into (1) this driver -- it chains per-layer Jacobians
-J_{l-1} = J_l @ M_l and averages over a corpus -- and (2) a per-architecture
-JacobianProvider that supplies M_l (the ONLY arch-specific part), resolved from
-PROVIDER_REGISTRY by model_type. See docs/DESIGN.md.
+For each source layer l, `J_l = d(acts[target])/d(acts[l])`: the exact end-to-end Jacobian
+from layer l's residual output to the target block's residual output, via `mx.vjp` of the
+"tail" (blocks l+1..target). Averaged over corpus prompts. There is NO chain of per-layer
+factors and NO closed-form norm seed — the final norm stays OUTSIDE J and is applied as the
+real module at decode (jlens_mlx.lens.JSpaceLens.apply, mirroring the heylook server). This
+mirrors anthropics/jacobian-lens fitting.py and is correct-by-construction.
 
-Chain-indexing invariant: J_l transports acts[l] (residual AFTER layer l);
-M_l is evaluated at layer l's INPUT acts[l-1]. Getting this wrong gives ~33-49%
-rel error instead of ~3-5%.
-
-STATUS: scaffold. The validated guts live in vendor/jlens_qwen36/ and are ported
-here per MIGRATION.md step 2. Signatures are the contract; bodies raise until wired.
+The tail runner (make_tail) is the only arch-specific piece; the default handles
+gpt2/llama-style blocks `block(h, mask, cache)`. qwen3_5 (GDN hybrid) needs its own runner
+(fa/ssm masks + is_linear dispatch) — the deferred accelerator (providers/qwen3_5_gdn).
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+import mlx.core as mx
 
-if TYPE_CHECKING:
-    import mlx.core as mx
+from .capture import ModelAdapter, capture_residuals
+from .providers.generic_vjp import jacobian_via_vjp
 
-    from .corpus import Corpus
-
-
-@runtime_checkable
-class JacobianProvider(Protocol):
-    """Supplies the per-layer Jacobian M_l = d(layer_l)/d(input) -- the only
-    architecture-specific piece of the fit."""
-
-    model_type: str
-
-    def final_norm_jacobian(self, model) -> "mx.array":
-        """Closed-form Jacobian of the model's final norm -- the chain seed J_L."""
-        ...
-
-    def layer_jacobian(self, model, layer_idx: int, input_acts: "mx.array") -> "mx.array":
-        """M_l for decoder layer `layer_idx`, evaluated at that layer's INPUT
-        activations (see the chain-indexing invariant above)."""
-        ...
+#: Leading positions excluded from the average (attention sinks). Anthropic uses 16 for
+#: 128-token prompts; scale down for short prompts.
+SKIP_FIRST_DEFAULT = 16
 
 
-# model_type -> provider class. Populated by jlens_mlx.providers. The default,
-# when a model_type has no registered accelerator, is the universal generic-VJP
-# provider (see resolve_provider).
-PROVIDER_REGISTRY: dict[str, type] = {}
+def valid_positions(seq_len: int, skip_first: int = SKIP_FIRST_DEFAULT) -> list[int]:
+    """Positions [skip_first, seq_len-1): skip attention sinks + the last position (no
+    next-token target). Mirrors Anthropic's valid_position_mask; clamps on short prompts
+    so at least one position remains."""
+    lo = skip_first if seq_len - 1 > skip_first else max(0, seq_len - 2)
+    return list(range(lo, seq_len - 1)) or [max(0, seq_len - 2)]
 
 
-def resolve_provider(model_type: str) -> JacobianProvider:
-    """The accelerator for this arch if registered, else the generic VJP baseline."""
-    from .providers import get_provider
+def make_tail(adapter: ModelAdapter, start: int, end: int):
+    """fn(h[1,S,D]) -> [1,S,D] running decoder blocks [start, end).
 
-    return get_provider(model_type)
+    Default runner for gpt2/llama-style blocks `block(h, mask, cache)`. For start >= end
+    (l == target) it is the identity, so J = I. qwen3_5/GDN needs its own runner."""
+    from mlx_lm.models.base import create_attention_mask
+
+    blocks = adapter.layers
+
+    def tail(h: mx.array) -> mx.array:
+        mask = create_attention_mask(h, cache=None)
+        for i in range(start, end):
+            h = blocks[i](h, mask, cache=None)
+        return h
+
+    return tail
 
 
-def fit_lens(
-    model,
-    corpus: "Corpus",
-    *,
-    source_layers: list[int] | None = None,
-    provider: JacobianProvider | None = None,
-    out_dir: str | None = None,
-):
-    """Fit a Jacobian lens: chain M_l over `source_layers` averaged over `corpus`,
-    seeded by the provider's final-norm Jacobian, and (if `out_dir`) save
-    safetensors + a provenance sidecar (recipe + model SHA + position policy).
+def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None = None,
+               target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT):
+    """Per-prompt `J_l = d(acts[target])/d(acts[l])` via mx.vjp of blocks[l+1..target].
+    Returns ({l: [D,D]}, seq_len)."""
+    ad = adapter or ModelAdapter(model)
+    n = ad.n_layers
+    target = (n - 1) if target_layer is None else (int(target_layer) % n)
+    ids = list(input_ids)
+    S = len(ids)
+    acts = capture_residuals(model, ids, list(range(n)), adapter=ad)  # {l: [S, D]}
+    valid = mx.array(valid_positions(S, skip_first))
+    out = {}
+    for l in source_layers:
+        tail = make_tail(ad, int(l) + 1, target + 1)       # blocks l+1..target; l==target -> identity
+        out[int(l)] = jacobian_via_vjp(tail, acts[int(l)][None], valid)
+    return out, S
 
-    `provider` defaults to resolve_provider(model.model_type). Returns the
-    per-layer J dict.
-    """
-    raise NotImplementedError(
-        "port the chain driver from vendor/jlens_qwen36/fit_analytic.py + analytic.py "
-        "(strip qwen specifics into the provider) -- MIGRATION.md step 2"
-    )
+
+def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter | None = None,
+             target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT):
+    """Average `J_l` over `prompts` (a running mean). `tokenize(prompt) -> list[int]`.
+    Returns ({l: [D,D]}, n_prompts). Save with jlens_mlx.lens.save."""
+    ad = adapter or ModelAdapter(model)
+    layers = sorted(int(l) for l in source_layers)
+    acc: dict[int, mx.array] | None = None
+    n = 0
+    for p in prompts:
+        per, _ = fit_prompt(model, tokenize(p), layers, adapter=ad,
+                            target_layer=target_layer, skip_first=skip_first)
+        acc = per if acc is None else {l: acc[l] + per[l] for l in layers}
+        mx.eval(list(acc.values()))
+        n += 1
+    return {l: acc[l] / n for l in layers}, n
