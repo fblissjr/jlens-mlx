@@ -107,9 +107,19 @@ def main() -> int:
 
     print(f"fitting band layers {layers} (target={target}, chunk={chunk}) over the corpus...",
           flush=True)
+
+    def _progress(p):
+        if p["skipped"]:
+            print(f"  item {p['i']+1}/{p['n_total']}: SKIPPED (no usable positions)", flush=True)
+            return
+        eta_min = (p["eta_secs"] or 0) / 60
+        print(f"  item {p['i']+1}/{p['n_total']} (on_policy={p['on_policy']} seq={p['seq_len']} "
+              f"pos={p['n_pos']}): {p['secs']:.0f}s  |  elapsed {p['elapsed']/60:.1f}m  "
+              f"eta ~{eta_min:.0f}m", flush=True)
+
     tf = time.perf_counter()
     jacobians, n_items = fit_corpus(model, corpus, source_layers=layers, adapter=ad,
-                                    target_layer=target, chunk_size=chunk)
+                                    target_layer=target, chunk_size=chunk, progress=_progress)
     mx.eval(list(jacobians.values()))
     print(f"fit {time.perf_counter()-tf:.1f}s over {n_items} items  "
           f"peak={mx.get_peak_memory()/2**30:.1f}GB", flush=True)

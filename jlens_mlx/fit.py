@@ -136,24 +136,45 @@ def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter |
 
 
 def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = None,
-               target_layer: int | None = None, chunk_size: int = CHUNK_SIZE_DEFAULT):
+               target_layer: int | None = None, chunk_size: int = CHUNK_SIZE_DEFAULT,
+               progress=None):
     """Average `J_l` over a materialized `Corpus` (jlens_mlx.corpus), using each item's own
     role-aware position mask (assistant/think span for on-policy prompts, content span for
     human-text). Returns ({l: [D,D]}, n_items). The corpus provenance should be stamped onto
-    the lens sidecar. Items whose positions all fall outside their sequence are skipped."""
+    the lens sidecar. Items whose positions all fall outside their sequence are skipped.
+
+    `progress(info)` is called after each item (long deep-band fits are otherwise silent) with
+    a dict: {i, n_total, done, skipped, seq_len, n_pos, on_policy, secs, elapsed, eta_secs}.
+    `secs` is that item's fit time; `eta_secs` extrapolates from the mean so far."""
+    import time
     ad = adapter or ModelAdapter(model)
     layers = sorted(int(l) for l in source_layers)
     acc: dict[int, mx.array] | None = None
     n = 0
-    for item in corpus.items:
+    n_total = len(corpus.items)
+    t_start = time.perf_counter()
+    for i, item in enumerate(corpus.items):
+        t0 = time.perf_counter()
         try:
             per, _ = fit_prompt(model, item.ids, layers, adapter=ad, target_layer=target_layer,
                                 chunk_size=chunk_size, positions=item.positions)
         except ValueError:
+            if progress:
+                progress({"i": i, "n_total": n_total, "done": n, "skipped": True,
+                          "seq_len": len(item.ids), "n_pos": len(item.positions),
+                          "on_policy": item.on_policy, "secs": 0.0,
+                          "elapsed": time.perf_counter() - t_start, "eta_secs": None})
             continue  # no usable positions for this item
         acc = dict(per) if acc is None else {l: acc[l] + per[l] for l in layers}
         mx.eval(list(acc.values()))
         n += 1
+        if progress:
+            elapsed = time.perf_counter() - t_start
+            eta = (elapsed / (i + 1)) * (n_total - i - 1)
+            progress({"i": i, "n_total": n_total, "done": n, "skipped": False,
+                      "seq_len": len(item.ids), "n_pos": len(item.positions),
+                      "on_policy": item.on_policy, "secs": time.perf_counter() - t0,
+                      "elapsed": elapsed, "eta_secs": eta})
     if not n:
         raise ValueError("fit_corpus: no items produced a usable fit")
     return {l: acc[l] / n for l in layers}, n
