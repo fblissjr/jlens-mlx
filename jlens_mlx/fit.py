@@ -18,7 +18,7 @@ from __future__ import annotations
 import mlx.core as mx
 
 from .capture import ModelAdapter, capture_residuals
-from .providers.generic_vjp import jacobian_via_vjp
+from .providers.generic_vjp import CHUNK_SIZE_DEFAULT, jacobian_via_vjp
 
 #: Leading positions excluded from the average (attention sinks). Anthropic uses 16 for
 #: 128-token prompts; scale down for short prompts.
@@ -75,8 +75,10 @@ def make_tail(adapter: ModelAdapter, start: int, end: int):
 
 
 def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None = None,
-               target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT):
+               target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT,
+               chunk_size: int = CHUNK_SIZE_DEFAULT):
     """Per-prompt `J_l = d(acts[target])/d(acts[l])` via mx.vjp of blocks[l+1..target].
+    `chunk_size` is the output-dim batch per VJP (see providers.generic_vjp).
     Returns ({l: [D,D]}, seq_len)."""
     ad = adapter or ModelAdapter(model)
     n = ad.n_layers
@@ -99,13 +101,15 @@ def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None 
     out = {}
     for l in layers:
         tail = make_tail(ad, l + 1, target + 1)  # blocks l+1..target; l == target -> identity
-        out[l] = jacobian_via_vjp(tail, acts[l][None], valid)
+        out[l] = jacobian_via_vjp(tail, acts[l][None], valid, chunk_size=chunk_size)
     return out, len(ids)
 
 
 def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter | None = None,
-             target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT):
+             target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT,
+             chunk_size: int = CHUNK_SIZE_DEFAULT):
     """Average `J_l` over `prompts` (a running sum divided once). `tokenize(prompt) -> list[int]`.
+    `chunk_size` is the output-dim batch per VJP (see providers.generic_vjp).
     Returns ({l: [D,D]}, n_prompts). Save with jlens_mlx.lens.save."""
     ad = adapter or ModelAdapter(model)
     layers = sorted(int(l) for l in source_layers)
@@ -113,7 +117,8 @@ def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter |
     n = 0
     for p in prompts:
         per, _ = fit_prompt(model, tokenize(p), layers, adapter=ad,
-                            target_layer=target_layer, skip_first=skip_first)
+                            target_layer=target_layer, skip_first=skip_first,
+                            chunk_size=chunk_size)
         acc = dict(per) if acc is None else {l: acc[l] + per[l] for l in layers}
         mx.eval(list(acc.values()))
         n += 1

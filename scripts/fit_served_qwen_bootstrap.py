@@ -131,6 +131,30 @@ def main() -> int:
               flush=True)
         return 0
 
+    if os.environ.get("JLENS_BENCH"):
+        # Time a FULL single-layer J at several chunk sizes (dim-batching sweep) to
+        # pick the chunk size + measure the real speedup vs chunk_size=1. No save.
+        from jlens_mlx.providers.generic_vjp import jacobian_via_vjp
+        src = min(layers)
+        ids = tok(prompts[0])
+        acts = capture_residuals(model, ids, [src], adapter=ad)
+        valid = mx.array(valid_positions(len(ids), skip))
+        h = acts[src][None]
+        chunks = [int(c) for c in os.environ.get("JLENS_BENCH_CHUNKS", "1,64,128,256").split(",")]
+        print(f"bench: full J_{src} (tail={target-src} blocks, D={D}) at chunk sizes {chunks}",
+              flush=True)
+        base = None
+        for c in chunks:
+            tail = make_tail(ad, src + 1, target + 1)
+            t1 = time.perf_counter()
+            J = jacobian_via_vjp(tail, h, valid, chunk_size=c)
+            mx.eval(J)
+            dt = time.perf_counter() - t1
+            base = base or dt
+            print(f"  chunk={c:>4}: {dt:6.1f}s/layer  ({base/dt:.1f}x vs chunk=1)  "
+                  f"peak={mx.get_peak_memory()/2**30:.1f}GB", flush=True)
+        return 0
+
     print(f"fitting layers {layers} (target={target}, skip_first={skip}) over "
           f"{len(prompts)} prompts...", flush=True)
     t1 = time.perf_counter()

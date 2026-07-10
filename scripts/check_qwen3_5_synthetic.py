@@ -171,6 +171,27 @@ def check_fit_parity(model, ad) -> None:
           f"cos={cos:.6f} max_rel_err={rel:.2e}")
 
 
+def check_dim_batching(model, ad) -> None:
+    """[4] dim-batched J (chunk_size>1) == one-at-a-time J (chunk_size=1).
+
+    Same estimator, just batched through fn's native batch axis -- must match to
+    fp32 round-off. Guards the GDN custom_function working under a batched primal.
+    """
+    print("[4] dim-batching: chunked J == chunk_size=1 J")
+    n = ad.n_layers
+    target = n - 1
+    ids = [1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45]
+    src = 2
+    J1, _ = fit_prompt(model, ids, [src], adapter=ad, target_layer=target,
+                       skip_first=2, chunk_size=1)
+    Jc, _ = fit_prompt(model, ids, [src], adapter=ad, target_layer=target,
+                       skip_first=2, chunk_size=7)  # odd chunk -> exercises the ragged tail
+    a = np.asarray(J1[src], dtype=np.float64)
+    b = np.asarray(Jc[src], dtype=np.float64)
+    err = float(np.abs(a - b).max() / (np.abs(a).max() + 1e-12))
+    check("batched == unbatched", err < 1e-5, f"max_rel_err={err:.2e}")
+
+
 def main() -> int:
     mx.random.seed(0)
     metal = mx.metal.is_available()
@@ -189,6 +210,7 @@ def main() -> int:
           f"(GDN={n_gdn}, FA={ad.n_layers - n_gdn})")
     check_forward_parity(model, ad)
     check_fit_parity(model, ad)
+    check_dim_batching(model, ad)
 
     print(f"\nQWEN3_5 GDN GATE {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
     return 0 if not FAILURES else 1
