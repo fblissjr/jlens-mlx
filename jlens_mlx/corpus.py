@@ -323,7 +323,10 @@ def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int 
             continue
         prompts = _load_stratum_prompts(stratum, k, recipe.seed)
         per_stratum.append((stratum, prompts))
-        prov_counts[stratum.hf_id] = len(prompts)
+        # Composite key: strata can share an hf_id (e.g. JBB harmful vs benign configs/splits),
+        # so keying on hf_id alone would collide and undercount.
+        key = ":".join(p for p in (stratum.hf_id, stratum.config, stratum.split) if p)
+        prov_counts[key] = prov_counts.get(key, 0) + len(prompts)
 
     # Flatten with a deterministic on-policy split: the first `on_policy_fraction` of EACH
     # stratum (post-shuffle) is generated on-policy; the rest stay human-text.
