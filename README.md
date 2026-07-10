@@ -46,6 +46,21 @@ plus the jlens-qwen36 Metal GDN backward as a custom VJP on the stock fused forw
 vs `mx.vjp` at every grain (`scripts/check_qwen3_5_synthetic.py`; kernel rel err ~3e-7,
 whole-fit J cos 1.000000 vs the pure-autodiff path, ~8x faster on even a tiny model).
 
+**Fitting pipeline complete (2026-07-10 PM).** On top of the above:
+- **Cotangent dim-batching** (`providers/generic_vjp.py`) — batches the D output-dim rows through the
+  tail's native batch axis; **2.4×**, verified == the one-at-a-time path (rel 2e-7).
+- **Exact reverse-mode CHAIN fitter** (`chain.py`) — fits ALL source layers in ONE backward sweep
+  (O(n_blocks) vs O(n_source·avg_tail)); **~20× on a dense band fit**, EXACT (verified == direct on
+  qwen3_5 + gpt2, cos 1.000000; `scripts/check_chain_vs_direct.py`). The `fit_corpus`/`fit_lens`
+  default (`use_chain=True`); direct path stays the golden reference + fallback. Caveat: the gemma
+  array-mask branch is un-gated (`use_chain=False` there).
+- **Corpus builder** (`corpus.py`) — streaming HF load + weighted strata + chat-template + role-aware
+  position masks; on-policy generation is a separated GPU step. 21 CPU unit tests (`tests/test_corpus.py`).
+- **Held-out fidelity gate + lens diff** (`verify.py`) — per-layer top-1/top-k/KL vs true logits with a
+  KL-based identity tripwire (quantization-tolerant); two-lens diff for the abliterated-vs-stock finding.
+- **First band-targeted own-fit** on the served abliterated Qwen3.5-27B (`scripts/fit_band_corpus.py`) —
+  corpus → `fit_corpus` over the product band (layers 16–47) → gate → provenanced save.
+
 We do **not** vendor jlens-qwen36. We port specific pieces (verified vs `mx.vjp`, attributed
 per-file); its only role is an *optional* GDN speed kernel for the 27B qwen. Reference clones
 (`jacobian-lens`, `jlens-qwen36`, `jspace`) live outside this repo. Next work: [`MIGRATION.md`](MIGRATION.md).
@@ -54,13 +69,15 @@ per-file); its only role is an *optional* GDN speed kernel for the 27B qwen. Ref
 
 ```
 jlens_mlx/
-  fit.py              # generic chain driver + JacobianProvider protocol + PROVIDER_REGISTRY
-  providers/          # per-arch M_l = d(layer)/d(input): generic_vjp (universal), qwen3_5_gdn (accelerator)
-  corpus.py           # Recipe + PositionMask + on-policy corpus builder (swappable, provenance-stamped)
+  fit.py              # direct end-to-end VJP fitter (per-layer tails) + fit_lens/fit_corpus (chain-default)
+  chain.py            # exact reverse-mode CHAIN fitter (one sweep, O(n_blocks)); VERIFIED == fit.py
+  providers/          # arch-specific tail pieces: generic_vjp (dim-batched, universal), qwen3_5_gdn (GDN kernel)
+  corpus.py           # Recipe + PositionMask + streaming on-policy corpus builder (provenance-stamped)
   lens.py             # save/load safetensors + sidecar; transport + unembed (apply, mirrors the server)
-  verify.py           # parity vs mx.vjp / oracle; held-out per-layer fidelity gate; lens diffing
+  verify.py           # held-out per-layer fidelity gate (KL identity tripwire) + lens diffing
 migrated_from_scratch/# the heylook Phase-1 verifier spike, relocated here
-scripts/              # verification gates (check_gpt2_parity, check_rmsnorm_seed, ...)
+tests/                # CPU unit tests (test_corpus.py); run: uv run pytest tests/ -q
+scripts/              # gates (check_{gpt2_parity,qwen3_5_synthetic,chain_vs_direct}, ...) + fit drivers
 docs/DESIGN.md        # the fitter + corpus design
 ```
 
