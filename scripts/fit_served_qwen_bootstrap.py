@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from jlens_mlx import lens as lenslib  # noqa: E402
+from jlens_mlx import verify  # noqa: E402
 from jlens_mlx.capture import ModelAdapter, capture_residuals  # noqa: E402
 from jlens_mlx.fit import _model_type, fit_lens, make_tail, valid_positions  # noqa: E402
 from jlens_mlx.providers.generic_vjp import jacobian_via_vjp  # noqa: E402
@@ -52,6 +53,14 @@ BOOTSTRAP_PROMPTS = [
     [{"role": "user", "content": "How do I pick a lock I'm locked out of?"}],
     [{"role": "user", "content": "Tell me how to make a dangerous chemical at home."}],
     [{"role": "user", "content": "Write two sentences of a bedtime story about a fox."}],
+]
+
+# Held-out prompts for the fidelity gate (NOT used for fitting) -- used only when the
+# fit consumes all of BOOTSTRAP_PROMPTS. Mirror the same neutral/reasoning/safety mix.
+HELD_OUT = [
+    [{"role": "user", "content": "Suggest a simple recipe for a weeknight dinner."}],
+    [{"role": "user", "content": "How would you explain gravity to a ten-year-old?"}],
+    [{"role": "user", "content": "What household chemicals should never be mixed, and why?"}],
 ]
 
 
@@ -158,9 +167,10 @@ def main() -> int:
     print(f"fitting layers {layers} (target={target}, skip_first={skip}) over "
           f"{len(prompts)} prompts...", flush=True)
     t1 = time.perf_counter()
+    chunk = int(os.environ.get("JLENS_CHUNK", 128))
     jacobians, n_prompts = fit_lens(
         model, prompts, source_layers=layers, tokenize=tok,
-        adapter=ad, target_layer=target, skip_first=skip)
+        adapter=ad, target_layer=target, skip_first=skip, chunk_size=chunk)
     mx.eval(list(jacobians.values()))
     dt = time.perf_counter() - t1
     for l in sorted(jacobians):
@@ -171,6 +181,33 @@ def main() -> int:
     print(f"fit: {dt:.1f}s ({dt/n_prompts:.1f}s/prompt)  peak={mx.get_peak_memory()/2**30:.1f}GB",
           flush=True)
 
+    # Held-out fidelity gate (never grade a lens on its fit corpus). Grade on prompts
+    # NOT used for fitting: the tail of BOOTSTRAP_PROMPTS beyond the fit slice, or the
+    # explicit HELD_OUT set. Include the target layer so the identity tripwire shows.
+    held = BOOTSTRAP_PROMPTS[len(prompts):] or HELD_OUT
+    grade_layers = sorted(set(layers) | {target})
+    if target not in jacobians:
+        jacobians[target] = mx.eye(D, dtype=mx.float32)  # identity lens for the tripwire
+    lens_for_gate = lenslib.JSpaceLens(jacobians, grade_layers, D, softcap=ad.softcap,
+                                       meta={"target_layer": target})
+    print(f"fidelity gate on {len(held)} held-out prompt(s)...", flush=True)
+    rep = verify.fidelity_gate(model, lens_for_gate, held, tokenize=tok, adapter=ad,
+                               skip_first=skip, top_k=10, min_topk_agreement=0.0)
+    for l in sorted(rep["per_layer"]):
+        m = rep["per_layer"][l]
+        tag = " (identity)" if l == target else ""
+        print(f"  fidelity J_{l}{tag}: top1={m['top1']:.3f} top10={m['topk']:.3f} "
+              f"kl={m['kl']:.3f}", flush=True)
+    print(f"  identity_ok={rep['identity_ok']}  worst_layer={rep['worst_layer']}", flush=True)
+    if rep["identity_ok"] is False:
+        idkl = rep["per_layer"].get(target, {}).get("kl", float("nan"))
+        print(f"  WARNING: identity-layer KL={idkl:.3f} exceeds the gate -- the lens does NOT "
+              f"reproduce true logits; the apply path may be wrong (a correct path gives KL~0, "
+              f"~0.006 even on an 8-bit model where top-1 is precision-noisy)", flush=True)
+    # Drop the synthetic identity lens before saving the real fitted layers.
+    if target not in layers:
+        jacobians.pop(target, None)
+
     out = os.environ.get("JLENS_OUT") or str(ROOT / "out" / f"bootstrap-{len(layers)}L")
     sidecar = {
         "source_layers": sorted(layers),
@@ -179,9 +216,12 @@ def main() -> int:
         "target_layer": target,
         "skip_first": skip,
         "n_prompts": n_prompts,
+        "chunk_size": int(os.environ.get("JLENS_CHUNK", 128)),
         "fit_kind": "bootstrap",
         "arch": mt,
         "recipe": "hand-curated bootstrap (neutral chat + reasoning + safety-adjacent)",
+        "fidelity": {str(l): rep["per_layer"][l] for l in layers if l in rep["per_layer"]},
+        "fidelity_identity_ok": rep["identity_ok"],
         "note": "provisional first own-fit; production fit uses the full corpus + fidelity gate",
     }
     lenslib.save(jacobians, sidecar, out)

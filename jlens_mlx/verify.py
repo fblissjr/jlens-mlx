@@ -39,7 +39,8 @@ def _topk_set_overlap(a_logits: mx.array, b_logits: mx.array, k: int) -> float:
 
 def fidelity_gate(model, lens, held_out, *, tokenize, adapter: ModelAdapter | None = None,
                   positions=None, skip_first: int = 4, top_k: int = 10,
-                  min_top1: float = 0.0, min_topk_agreement: float = 0.5) -> dict:
+                  min_top1: float = 0.0, min_topk_agreement: float = 0.5,
+                  identity_max_kl: float = 5e-2) -> dict:
     """Per-layer agreement between the lens readout and the model's TRUE logits, on
     HELD-OUT prompts. Never grade a lens on its fit corpus.
 
@@ -94,9 +95,14 @@ def fidelity_gate(model, lens, held_out, *, tokenize, adapter: ModelAdapter | No
     passed = bool(graded) and all(
         per_layer[l]["top1"] >= min_top1 and per_layer[l]["topk"] >= min_topk_agreement
         for l in graded)
+    # Identity/target-layer tripwire: does the lens reproduce the model's TRUE logits?
+    # Graded on KL (the distribution match), NOT top-1 exactness -- on a QUANTIZED model,
+    # fp32-vs-native rounding swaps near-tied tokens so top-1 is <1.0 even for a correct
+    # apply path (e.g. 8-bit 27B: identity top1~0.97, top10~0.99, KL~0.006). A broken apply
+    # path gives a LARGE KL, which this catches; on fp32 (synthetic) KL is ~0.
     identity_ok = None
     if target in per_layer:
-        identity_ok = per_layer[target]["top1"] > 0.999 and per_layer[target]["kl"] < 1e-3
+        identity_ok = per_layer[target]["kl"] < identity_max_kl
     return {"per_layer": per_layer, "passed": passed, "worst_layer": worst,
             "n_prompts": len(held_out), "identity_ok": identity_ok}
 
