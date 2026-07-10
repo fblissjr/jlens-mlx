@@ -12,7 +12,7 @@ paper). This repo **fits** lenses; the `heylookitsanllm` server **applies** them
 ## Why this repo exists
 
 - **Fit our own lenses on Apple silicon** — no PyTorch/CUDA. The killer case: an
-  abliterated ("heretic") instruct model has no pre-fit lens available, and a lens must
+  abliterated instruct model has no pre-fit lens available, and a lens must
   be fit on the *edited* weights we actually serve to read what abliteration did.
 - **Modular, not a single-arch trainer.** Fitting decomposes into a generic driver +
   a per-architecture Jacobian provider resolved by `model_type`. The generic

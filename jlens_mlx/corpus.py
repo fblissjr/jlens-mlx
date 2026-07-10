@@ -75,8 +75,8 @@ class Corpus:
 #: Primary recipe for the abliterated Qwen. Over-weighted safety (25% vs its ~1-3% natural
 #: frequency) so the refusal circuitry is ACTIVE at estimation time — the single most important
 #: departure from a WikiText lens.
-HERETIC_QWEN = Recipe(
-    name="heretic-qwen-chat-safety-v1",
+ABLITERATED_QWEN = Recipe(
+    name="abliterated-qwen-chat-safety-v1",
     n_prompts=300,
     on_policy_fraction=0.6,
     strata=[

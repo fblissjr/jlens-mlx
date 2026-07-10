@@ -58,7 +58,7 @@ JacobianProvider = Protocol:
 PROVIDER_REGISTRY = {"qwen3_5": Qwen35GdnProvider, ...}   # default: GenericVjpProvider
 ```
 
-**Coverage:** `qwen3_5` (Qwen3.5/3.6-27B, our served heretic) → accelerator. Everything
+**Coverage:** `qwen3_5` (Qwen3.5/3.6-27B, our served abliterated) → accelerator. Everything
 else → generic. Gemma-4 MoE stays on the heylook offline-torch convert path until it
 earns an accelerator (its MoE attention/MLP need their own analytic derivation, or accept
 the slow generic VJP).
@@ -100,7 +100,7 @@ its own fitting corpus.
 
 ### Lens diffing
 
-Compare two lenses (WikiText-fit vs chat-fit; stock vs heretic) as a first-class op. For
+Compare two lenses (WikiText-fit vs chat-fit; stock vs abliterated) as a first-class op. For
 the abliteration study, **the diff is the finding.**
 
 ## 3. Vision (later)

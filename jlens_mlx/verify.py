@@ -19,6 +19,6 @@ def fidelity_gate(model, lens, held_out, *, min_topk_agreement: float = 0.5) -> 
 
 
 def diff(lens_a, lens_b, *, tokens=None) -> dict:
-    """Diff two lenses' readouts (e.g. stock vs heretic) along given token
+    """Diff two lenses' readouts (e.g. stock vs abliterated) along given token
     directions. For the abliteration study, the diff IS the finding."""
     raise NotImplementedError("new -- docs/DESIGN.md 'Lens diffing'")

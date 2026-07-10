@@ -47,7 +47,7 @@ kernel vs ops, golden gate). Keep provenance headers.
 
 ## 3. First own-fit (Metal-gated — a focused session on the Mac)
 
-Target: `Qwen3.5-27B-heretic-8bit-mlx` (confirmed `qwen3_5`: 64 layers,
+Target: `Qwen3.5-27B-abliterated-8bit-mlx` (confirmed `qwen3_5`: 64 layers,
 `full_attention_interval=4` → 48 GDN + 16 full-attn, `d_model` 5120).
 
 - [ ] A small **chat + safety** corpus recipe (chat-templated, assistant/think-span
@@ -56,11 +56,11 @@ Target: `Qwen3.5-27B-heretic-8bit-mlx` (confirmed `qwen3_5`: 64 layers,
 - [ ] Fit; **held-out fidelity gate** (per-layer KL / top-k vs true logits on held-out
       target-distribution data) — refuse to save if it fails.
 - [ ] Convert → `lens.safetensors` + sidecar (recipe + model SHA + position policy as
-      provenance); drop into the server's `adapters/jspace/Qwen3.5-27B-heretic-8bit-mlx/`.
+      provenance); drop into the server's `adapters/jspace/Qwen3.5-27B-abliterated-8bit-mlx/`.
 
 ## 4. The first finding
 
-- [ ] **Lens diff**: fit a stock-Qwen lens and a heretic lens; diff their readouts along
+- [ ] **Lens diff**: fit a stock-Qwen lens and a abliterated lens; diff their readouts along
       the refusal directions. The diff is the finding (what abliteration nulled vs rerouted).
 
 ## 5. Publish (only after step 3 succeeds)

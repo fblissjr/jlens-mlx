@@ -1,7 +1,7 @@
 """Atomic verification of the closed-form RMSNorm Jacobian (the chain SEED).
 
 The fit chains J_{l-1} = J_l @ M_l seeded by J_L = d(final_norm)/d(acts). For
-RMSNorm models (qwen3_5 heretic, gemma) that seed is computed in closed form
+RMSNorm models (qwen3_5 abliterated, gemma) that seed is computed in closed form
 (vendor/jlens_qwen36/analytic.py::rms_norm_jacobian) instead of a 5120-VJP pass.
 This proves that closed form matches mx.vjp autograd -- both the single-position
 exact Jacobian AND the position-averaging convention (a real source of bugs).
