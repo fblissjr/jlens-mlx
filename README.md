@@ -41,6 +41,10 @@ committed under `tests/`.
 oracle on gpt2 (V1 parity, cos 1.00000; `scripts/check_gpt2_parity.py`). The fitter follows
 **Anthropic's `jacobian-lens`** — direct end-to-end autograd (`mx.vjp` on MLX), the norm kept
 *outside* `J` and applied as the real module at decode — see [`docs/DESIGN.md`](docs/DESIGN.md).
+The **`qwen3_5` GDN tail is ported + verified (2026-07-10)**: per-layer fa/ssm mask dispatch
+plus the jlens-qwen36 Metal GDN backward as a custom VJP on the stock fused forward — gated
+vs `mx.vjp` at every grain (`scripts/check_qwen3_5_synthetic.py`; kernel rel err ~3e-7,
+whole-fit J cos 1.000000 vs the pure-autodiff path, ~8x faster on even a tiny model).
 
 We do **not** vendor jlens-qwen36. We port specific pieces (verified vs `mx.vjp`, attributed
 per-file); its only role is an *optional* GDN speed kernel for the 27B qwen. Reference clones

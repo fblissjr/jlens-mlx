@@ -10,7 +10,8 @@ mirrors anthropics/jacobian-lens fitting.py and is correct-by-construction.
 The tail runner (make_tail) is the only arch-specific piece. It builds the causal mask the
 model's own forward uses: the "causal" STRING for SDPA-path archs (gpt2/llama), or an ARRAY
 mask for archs whose attention reads `mask.dtype` (gemma*, which use a manual softcapped score
-path). qwen3_5 (GDN hybrid) needs its own tail — the deferred accelerator (providers/qwen3_5_gdn).
+path). qwen3_5 (GDN hybrid) dispatches to providers/qwen3_5_gdn.make_qwen3_5_tail (per-layer
+fa/ssm masks + the differentiable GDN recurrence with the ported Metal backward).
 """
 from __future__ import annotations
 
@@ -27,6 +28,10 @@ SKIP_FIRST_DEFAULT = 16
 #: attention) and so require an ARRAY causal mask, not the "causal" string that SDPA-path
 #: models accept. gpt2/llama stay on the string mask, so their verified parity is untouched.
 _ARRAY_MASK_ARCHS = {"gemma2", "gemma3", "gemma3_text", "gemma"}
+
+#: Gated-DeltaNet hybrid architectures (fa/ssm mask dispatch + a GDN recurrence with
+#: no fused-kernel VJP) -- routed to providers/qwen3_5_gdn.make_qwen3_5_tail.
+_GDN_TAIL_ARCHS = {"qwen3_5", "qwen3_5_text", "qwen3_5_moe"}
 
 
 def valid_positions(seq_len: int, skip_first: int = SKIP_FIRST_DEFAULT) -> list[int]:
@@ -50,8 +55,12 @@ def _model_type(adapter: ModelAdapter) -> str:
 def make_tail(adapter: ModelAdapter, start: int, end: int):
     """fn(h[1,S,D]) -> [1,S,D] running decoder blocks [start, end) with the model's own
     causal mask type (array for gemma*, "causal" string for gpt2/llama). For start >= end
-    (l == target) it is the identity, so J = I. qwen3_5/GDN needs its own runner."""
+    (l == target) it is the identity, so J = I. qwen3_5/GDN gets its own runner."""
     from mlx_lm.models.base import create_attention_mask
+
+    if _model_type(adapter) in _GDN_TAIL_ARCHS:
+        from .providers.qwen3_5_gdn import make_qwen3_5_tail
+        return make_qwen3_5_tail(adapter, start, end)
 
     blocks = adapter.layers
     array_mask = _model_type(adapter) in _ARRAY_MASK_ARCHS
