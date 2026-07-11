@@ -134,6 +134,28 @@ def main() -> int:
     print(f"  tok_len min/med/max={min(tok_lens)}/{sorted(tok_lens)[len(tok_lens)//2]}/{max(tok_lens)}"
           f"  pos/prompt mean={sum(pos_lens)/len(pos_lens):.1f}", flush=True)
 
+    # GDN kernel-cliff guard: the fused Metal backward is only eligible for T <= MAX_T (=128); longer
+    # items SILENTLY fall to the differentiable ops fallback -- much slower + per-step-state memory
+    # blowup (OOM risk). Warn loudly and record kernel-eligibility so a corpus straddling the cliff
+    # doesn't quietly balloon the fit. (Recorded in the sidecar as on_kernel_frac / max_tok_len.)
+    max_t_val, n_over_maxt = None, 0
+    try:
+        from jlens_mlx.providers.qwen3_5_gdn import MAX_T
+        from jlens_mlx.fit import _GDN_TAIL_ARCHS
+        if mt in _GDN_TAIL_ARCHS:
+            max_t_val = MAX_T
+            n_over_maxt = sum(1 for t in tok_lens if t > MAX_T)
+            if n_over_maxt:
+                print(f"  ⚠ WARNING: {n_over_maxt}/{len(tok_lens)} items exceed MAX_T={MAX_T} -> they "
+                      f"fall to the SLOW differentiable ops fallback (much slower + memory blowup, OOM "
+                      f"risk). Set JLENS_MAX_SEQ_LEN<={MAX_T} to keep every item on the fast GDN kernel.",
+                      flush=True)
+            else:
+                print(f"  all {len(tok_lens)} items <= MAX_T={MAX_T}: fully on the fast GDN kernel path.",
+                      flush=True)
+    except Exception:
+        pass
+
     print(f"fitting band layers {layers} (target={target}, chunk={chunk}) over the corpus...",
           flush=True)
 
@@ -214,6 +236,11 @@ def main() -> int:
         "model_id": model_id, "hf_model_name": model_id, "fit_source": "jlens-mlx own-fit",
         "fit_date": datetime.date.today().isoformat(), "jlens_git_sha": sha, "arch": mt,
         "corpus": corpus.provenance,
+        # Kernel-eligibility provenance: whether the whole corpus stayed on the fast GDN kernel
+        # (T <= MAX_T) or some items hit the slow ops fallback -- so a lens records the conditions
+        # it was fit under (max_tok_len, MAX_T, how many items straddled the cliff).
+        "kernel": {"max_t": max_t_val, "max_tok_len": max(tok_lens), "n_over_max_t": n_over_maxt,
+                   "all_on_kernel": (n_over_maxt == 0) if max_t_val is not None else None},
         "fidelity": {str(l): rep["per_layer"][l] for l in layers if l in rep["per_layer"]},
         "fidelity_identity_ok": rep["identity_ok"],
         "note": "first band-targeted corpus fit; scoped proof (small corpus) -- dense band fit is the overnight run",
