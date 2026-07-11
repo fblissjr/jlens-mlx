@@ -114,6 +114,45 @@ class Corpus:
                    items=items, provenance=p.get("provenance", {}))
 
 
+def decode_corpus(corpus: "Corpus", tokenizer, *, show_special: bool = True) -> str:
+    """Render a Corpus back to human-readable text for inspection (LOCAL-ONLY).
+
+    Decodes each item's token ids WITH special tokens shown by default — the whole point of
+    eyeballing the corpus is to see EXACTLY what the model saw, and the chat markers
+    (``<|im_start|>assistant``, ``<think>``, ``<|im_end|>``) make the prompt-vs-generated-response
+    boundary visible. For on-policy items the model's own response span (what the Jacobian reads)
+    is split out explicitly from the position mask.
+
+    Contains raw dataset prompts + the model's OWN on-policy completions, including the safety
+    strata (i.e. whatever the abliterated model generated for harmful prompts). Keep it
+    gitignored/local; do not commit or share.
+    """
+    prov = corpus.provenance
+    n_op = sum(1 for it in corpus.items if it.on_policy)
+
+    def dec(ids):
+        return tokenizer.decode(ids, skip_special_tokens=not show_special)
+
+    out = [
+        f"# Decoded corpus: {prov.get('recipe', '?')}  ({len(corpus.items)} items, {n_op} on-policy)",
+        f"# strata={prov.get('strata', {})}  seed={prov.get('seed')}  "
+        f"max_seq_len={prov.get('max_seq_len')}  dropped_over_len={prov.get('dropped_over_len')}",
+        "# LOCAL-ONLY inspection artifact: raw dataset prompts + the model's on-policy completions",
+        "# (incl. harmful-stratum content + what the abliterated model generated). Do NOT commit/share.",
+        "",
+    ]
+    for i, it in enumerate(corpus.items):
+        out.append(f"## item {i}  [stratum={it.stratum}  on_policy={it.on_policy}  "
+                   f"tokens={len(it.ids)}  masked_positions={len(it.positions)}]")
+        if it.on_policy and it.positions:
+            split = min(it.positions)     # ≈ prompt-prefix length (the assistant span starts here)
+            out += ["--- prompt (through the generation prompt) ---", dec(it.ids[:split]),
+                    "--- model's on-policy response (the span J reads) ---", dec(it.ids[split:]), ""]
+        else:
+            out += [dec(it.ids), ""]
+    return "\n".join(out)
+
+
 # --- Concrete recipes (from the HF-verified dataset study) ------------------------------------
 
 #: Primary recipe for the abliterated Qwen. Over-weighted safety (25% vs its ~1-3% natural

@@ -116,6 +116,15 @@ def main() -> int:
                                 on_policy_max_tokens=int(os.environ.get("JLENS_ONPOLICY_TOKENS", 48)),
                                 max_seq_len=max_seq_len)
         corpus.to_json(corpus_json)
+        # Store a human-readable decode by default (local-only; raw prompts + on-policy gens) so the
+        # corpus is inspectable without a separate step -- esp. what the abliterated model generated.
+        try:
+            decoded_path = os.path.join(ckpt_dir, "corpus_decoded.md")
+            with open(decoded_path, "w") as f:
+                f.write(C.decode_corpus(corpus, tokenizer))
+            print(f"  decoded corpus -> {decoded_path} (local-only inspection)", flush=True)
+        except Exception as e:
+            print(f"  (decode_corpus skipped: {e})", flush=True)
         print(f"  corpus: {len(corpus.items)} items in {time.perf_counter()-tc:.1f}s  "
               f"{corpus.provenance['strata']}  on_policy={sum(it.on_policy for it in corpus.items)} "
               f"  dropped_over_len={corpus.provenance['dropped_over_len']} (max_seq_len={max_seq_len}) "

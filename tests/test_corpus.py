@@ -19,8 +19,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from jlens_mlx.corpus import (  # noqa: E402
     ABLITERATED_QWEN, SAFETY_BENIGN, SAFETY_HARMFUL, WIKITEXT_CONTROL,
     Corpus, CorpusItem, PositionMask, Recipe, Stratum,
-    _extract_prompt, _prompt_fits, _weighted_counts, build_positions,
+    _extract_prompt, _prompt_fits, _weighted_counts, build_positions, decode_corpus,
 )
+
+
+# --- decode_corpus (readable inspection render) ----------------------------------------------
+
+class _FakeTok:
+    """Marks whether special tokens were kept, so the test can assert the render + boundary split."""
+    def decode(self, ids, skip_special_tokens=False):
+        return f"[{'nosp' if skip_special_tokens else 'sp'}:{'-'.join(map(str, ids))}]"
+
+
+def test_decode_corpus_shows_specials_and_splits_on_policy():
+    c = Corpus(recipe=Recipe(name="t", strata=[Stratum("x", 1.0, "chat")]),
+               items=[CorpusItem([1, 2, 3, 4, 5], [2, 3], "safety", on_policy=True),
+                      CorpusItem([9, 8, 7], [0, 1], "benign", on_policy=False)],
+               provenance={"recipe": "t", "strata": {"x": 2}, "seed": 0})
+    md = decode_corpus(c, _FakeTok())
+    # header + per-item metadata
+    assert "Decoded corpus: t" in md
+    assert "stratum=safety" in md and "on_policy=True" in md
+    # special tokens SHOWN by default (skip_special_tokens=False -> the 'sp' marker)
+    assert "[sp:" in md and "[nosp:" not in md
+    # on-policy item is split at min(positions)=2: prompt ids[:2], response ids[2:]
+    assert "model's on-policy response" in md
+    assert "[sp:1-2]" in md and "[sp:3-4-5]" in md
+    # human-text item decoded whole, no split
+    assert "[sp:9-8-7]" in md
+
+
+def test_decode_corpus_show_special_false_hides_them():
+    c = Corpus(recipe=Recipe(name="t", strata=[Stratum("x", 1.0, "chat")]),
+               items=[CorpusItem([1, 2], [0], "chat", on_policy=False)], provenance={})
+    md = decode_corpus(c, _FakeTok(), show_special=False)
+    assert "[nosp:1-2]" in md and "[sp:" not in md
 
 
 # --- _weighted_counts ------------------------------------------------------------------------
