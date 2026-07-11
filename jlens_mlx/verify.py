@@ -147,3 +147,127 @@ def diff(model, lens_a, lens_b, prompts, *, tokenize, adapter: ModelAdapter | No
         per_layer[l] = {"top_up": up, "top_down": down,
                         "l2": float(np.linalg.norm(mean))}
     return {"per_layer": per_layer, "source_layers": layers, "n": sum(counts.values())}
+
+
+# --- legibility: a replacement ranking signal for band layers ---------------------------------
+#
+# `fidelity_gate` scores a layer's readout by agreement with the model's TRUE final logits.
+# That is the right question for the identity/target-layer tripwire, but the WRONG question for
+# ranking band (early/mid) layers: a lens is supposed to diverge from the final distribution at
+# those layers -- that divergence is the useful signal, not an error. Empirically this backfires
+# hard on a served abliterated model, where the true final logits are themselves near-degenerate
+# (softmax collapsed onto punctuation/formatting tokens): a band layer whose top-k happened to
+# also be junk (' __', '**', '___') scored HIGH final-logit agreement, while a band layer with
+# real semantic content (' Paris', ' city') scored LOW, because it correctly diverged from the
+# degenerate final distribution. `legibility_report` below scores a layer's readout on its OWN
+# terms -- does its top-k decode to real words? -- rather than against the final logits.
+
+def _is_content_token(tok: str) -> bool:
+    """Classify one ALREADY-DECODED top-k token string as CONTENT vs DEGENERATE.
+
+    No model/tokenizer access here -- pure string logic, so it is trivially unit-testable.
+    Ambiguous cases are classified DEGENERATE (conservative default): this is a legibility
+    signal, not a linguistic parser, and a false "content" is more misleading than a false
+    "degenerate" when the whole point is separating meaningful readouts from junk.
+
+    Rules:
+      1. Strip a leading BPE space-marker if present -- GPT-2/RoBERTa-style ``Ġ``, SentencePiece
+         ``▁``, or a plain leading space (possibly repeated). What decoded top-k strings look
+         like depends on the tokenizer; all three show up in practice.
+      2. Empty after stripping (pure whitespace/marker token) -> DEGENERATE.
+      3. A bracket-wrapped special/structural token -- ``<|im_start|>``, ``<think>``, ``[INST]``
+         -- (starts with ``<``/``[`` and ends with ``>``/``]``) -> DEGENERATE. This is the special-
+         token marker convention already used for chat scaffolding elsewhere in this codebase
+         (see ``corpus.decode_corpus``'s ``<|im_start|>assistant`` / ``<think>`` / ``<|im_end|>``
+         examples) -- no new convention invented here.
+      4. Otherwise: CONTENT iff the first character is a letter or digit (any script/unicode
+         category -- ``str.isalpha()``/``str.isdigit()`` generalize past Latin, so CJK and other
+         ideograph tokens are handled without a hardcoded script list) AND every remaining
+         character is alphanumeric or one of ``'``/``-`` (contractions, hyphenated words).
+         Anything else -- punctuation/symbol runs (``__``, ``**``, ``___``, ``?.``, ``...).``,
+         ``="``), pure formatting (newlines/tabs) -- is DEGENERATE.
+    """
+    if not tok:
+        return False
+    s = tok
+    if s[0] in ("Ġ", "▁"):
+        s = s[1:]
+    elif s[0] == " ":
+        s = s.lstrip(" ")
+    if not s:
+        return False                                    # nothing left after the marker/space
+    if s[0] in ("<", "[") and s[-1] in (">", "]"):
+        return False                                     # bracket-wrapped special/structural token
+    if not (s[0].isalpha() or s[0].isdigit()):
+        return False
+    return all(ch.isalnum() or ch in ("'", "-") for ch in s[1:])
+
+
+def legibility_fraction(tokens: list[str]) -> float:
+    """Fraction of ``tokens`` (already-decoded top-k strings, one readout's worth) that are
+    CONTENT per :func:`_is_content_token`. ``[]`` -> ``nan`` (no positions graded, not 0)."""
+    if not tokens:
+        return float("nan")
+    return sum(1 for t in tokens if _is_content_token(t)) / len(tokens)
+
+
+def legibility_report(model, lens, held_out, *, tokenize, tokenizer, adapter: ModelAdapter | None = None,
+                      positions=None, skip_first: int = 4, top_k: int = 10) -> dict:
+    """Per-layer LEGIBILITY of the lens readout, on HELD-OUT prompts -- the ranking signal to use
+    INSTEAD OF ``fidelity_gate``'s final-logit agreement when judging band (non-identity) layers.
+    See the module-level note above this function for why.
+
+    Metrics per source layer, averaged over held-out prompts (x positions within each prompt):
+      - ``legibility``: mean :func:`legibility_fraction` of the layer's top-k decoded tokens --
+        high = the readout's top-k are real words, low = punctuation/symbol junk.
+      - ``entropy``: mean entropy (nats) of the layer's own output distribution -- reported
+        alongside legibility for context (a collapsed, low-entropy distribution over junk tokens
+        reads very differently from a confident, low-entropy distribution over real content).
+
+    This does NOT replace ``fidelity_gate``: the identity-layer KL tripwire (does the lens
+    reproduce the model's TRUE logits at the target layer) is still the correctness check and
+    lives there, unchanged. This function only concerns itself with band-layer QUALITY.
+
+    Args:
+        model: mlx-lm model.
+        lens: a :class:`~jlens_mlx.lens.JSpaceLens`.
+        held_out: prompts NOT in the fit corpus.
+        tokenize: ``prompt -> list[int]``.
+        tokenizer: exposes ``decode(ids) -> str``, used to turn each top-k token id into the
+            decoded string ``_is_content_token`` classifies (mirrors ``corpus.decode_corpus``'s
+            ``tokenizer.decode`` usage).
+        positions: token positions to grade (default: ``valid_positions`` per prompt).
+        top_k: readout size to classify per position.
+
+    Returns:
+        ``{"per_layer": {l: {"legibility": float, "entropy": float}},
+           "ranked": [layer, ...] sorted by legibility DESCENDING, "n_prompts": int}``.
+        ``ranked`` is a distinct selection path from ``fidelity_gate``'s ``worst_layer``
+        (ascending final-logit topk agreement) -- use ``ranked`` to pick a meaningful band layer,
+        not ``fidelity_gate``'s output.
+    """
+    import numpy as np
+    ad = adapter or ModelAdapter(model)
+    layers = list(lens.source_layers)
+    agg = {l: {"legibility": [], "entropy": []} for l in layers}
+
+    for prompt in held_out:
+        ids = tokenize(prompt)
+        pos = positions if positions is not None else valid_positions(len(ids), skip_first)
+        res = capture_residuals(model, ids, layers, adapter=ad)
+        lens_out = lens.apply(ad, res, positions=pos, layers=layers)   # {l: [n_pos, vocab]}
+        for l in layers:
+            ll = lens_out[l].astype(mx.float32)
+            lsm = ll - mx.logsumexp(ll, axis=-1, keepdims=True)
+            prob = mx.exp(lsm)
+            ent = float((-(prob * lsm).sum(-1)).mean().item())
+            topk_ids = np.asarray(mx.argsort(-ll, axis=-1)[:, :top_k])  # [n_pos, top_k]
+            fracs = [legibility_fraction([tokenizer.decode([int(t)]) for t in row])
+                     for row in topk_ids]
+            agg[l]["legibility"].append(sum(fracs) / len(fracs) if fracs else float("nan"))
+            agg[l]["entropy"].append(ent)
+
+    per_layer = {l: {m: (sum(v) / len(v) if v else float("nan")) for m, v in d.items()}
+                 for l, d in agg.items()}
+    ranked = sorted(layers, key=lambda l: per_layer[l]["legibility"], reverse=True)
+    return {"per_layer": per_layer, "ranked": ranked, "n_prompts": len(held_out)}
