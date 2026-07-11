@@ -77,7 +77,9 @@ def main() -> int:
     print(f"load {time.perf_counter()-t0:.1f}s  n_layers={n} d_model={D} band=[{b_lo},{b_hi}) "
           f"arch={mt} peak={mx.get_peak_memory()/2**30:.1f}GB", flush=True)
 
-    layers = ([int(x) for x in os.environ["JLENS_LAYERS"].split(",")]
+    # `if x.strip()` tolerates a trailing/empty field -- macOS BSD `seq -s, A B`
+    # emits a TRAILING separator ("16,...,47,"), which would otherwise int('')-crash.
+    layers = ([int(x) for x in os.environ["JLENS_LAYERS"].split(",") if x.strip()]
               if os.environ.get("JLENS_LAYERS") else [40, 44, 47])  # shallow-band sample
     out_of_band = [l for l in layers if not (b_lo <= l < b_hi)]
     if out_of_band:
