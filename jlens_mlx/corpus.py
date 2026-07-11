@@ -254,6 +254,22 @@ def _chat_ids(tokenizer, user_text: str, *, add_generation_prompt: bool) -> list
         add_generation_prompt=add_generation_prompt, tokenize=True))
 
 
+def _prompt_fits(prefix_len: int, max_seq_len: int | None, reserve: int = 0) -> bool:
+    """Whether a prompt whose chat-templated prefix is `prefix_len` tokens can be a corpus item
+    under `max_seq_len`, reserving `reserve` tokens for an on-policy completion (0 = human-text,
+    no completion). `max_seq_len=None` disables the cap.
+
+    This is the per-item length gate. The chain fitter carries an [C, S, D] cotangent through the
+    tail, so a single item's wall-clock scales with S (its sequence length); an item longer than a
+    checkpoint window can't be split (per-item checkpointing), so over-long items are DROPPED here
+    rather than truncated -- a truncated prompt would yield meaningless activations. Reserving the
+    completion length guarantees prefix + generated <= max_seq_len for on-policy items too.
+    """
+    if max_seq_len is None:
+        return True
+    return prefix_len + max(0, reserve) <= max_seq_len
+
+
 def build_positions(ids: list[int], prompt_prefix_len: int, mask: PositionMask,
                     *, think_span: tuple[int, int] | None = None,
                     skip_first: int = 4) -> list[int]:
@@ -315,7 +331,8 @@ def generate_on_policy(model, tokenizer, user_texts: list[str], *, max_tokens: i
     return out
 
 
-def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int = 64) -> Corpus:
+def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int = 64,
+                 max_seq_len: int | None = 512) -> Corpus:
     """Render `recipe` into a Corpus of chat-templated, position-masked prompts.
 
     Offline (no model needed): stream + weight-sample each stratum, chat-template, tokenize, and
@@ -323,6 +340,12 @@ def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int 
     prompts, append the model's own sampled completion and mask the generated assistant span.
     Pass `model=None` to build the human-text-only corpus (all masks over prompt content) --
     useful to prepare the corpus with the server up, then generate on-policy once it's stopped.
+
+    `max_seq_len` bounds every included item's sequence length (None disables): over-long prompts
+    are DROPPED (not truncated -- see `_prompt_fits`), so no single item's fit can outlive a
+    checkpoint window. On-policy prompts are pre-filtered BEFORE generation (reserving
+    `on_policy_max_tokens` for the completion) so the GPU never generates for an item we'll drop.
+    Drops are recorded in `provenance['dropped_over_len']`.
 
     `tokenizer` MUST be the mlx-lm `TokenizerWrapper` (from `mlx_lm.load` / `mlx_lm.tokenizer_utils.
     load`), which carries the model's jinja chat template. A raw `transformers.AutoTokenizer` loaded
@@ -357,20 +380,33 @@ def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int 
     # Flatten with a deterministic on-policy split: the first `on_policy_fraction` of EACH
     # stratum (post-shuffle) is generated on-policy; the rest stay human-text.
     items: list[CorpusItem] = []
+    dropped = 0
     for stratum, prompts in per_stratum:
         n_op = int(round(len(prompts) * recipe.on_policy_fraction)) if model is not None else 0
         op_texts, human_texts = prompts[:n_op], prompts[n_op:]
 
+        # On-policy: pre-filter by the templated PREFIX length (reserving room for the completion)
+        # BEFORE generating, so the GPU never runs for a prompt we'd drop for length.
         if op_texts:
-            full_seqs = generate_on_policy(model, tokenizer, op_texts,
-                                           max_tokens=on_policy_max_tokens, seed=recipe.seed)
-            for text, ids in zip(op_texts, full_seqs):
+            fit_texts = []
+            for text in op_texts:
                 prefix = len(_chat_ids(tokenizer, text, add_generation_prompt=True))
-                pos = build_positions(ids, prefix, recipe.positions)
-                items.append(CorpusItem(ids, pos, stratum.kind, on_policy=True))
+                if _prompt_fits(prefix, max_seq_len, reserve=on_policy_max_tokens):
+                    fit_texts.append((text, prefix))
+                else:
+                    dropped += 1
+            if fit_texts:
+                full_seqs = generate_on_policy(model, tokenizer, [t for t, _ in fit_texts],
+                                               max_tokens=on_policy_max_tokens, seed=recipe.seed)
+                for (text, prefix), ids in zip(fit_texts, full_seqs):
+                    pos = build_positions(ids, prefix, recipe.positions)
+                    items.append(CorpusItem(ids, pos, stratum.kind, on_policy=True))
 
         for text in human_texts:
             ids = _chat_ids(tokenizer, text, add_generation_prompt=recipe.chat_templated)
+            if not _prompt_fits(len(ids), max_seq_len):  # no completion -> gate the whole prompt
+                dropped += 1
+                continue
             prefix = len(ids)  # no completion -> the whole thing is the prompt prefix
             pos = build_positions(ids, prefix, recipe.positions)
             items.append(CorpusItem(ids, pos, stratum.kind, on_policy=False))
@@ -382,5 +418,7 @@ def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int 
         "chat_templated": recipe.chat_templated,
         "strata": prov_counts,
         "seed": recipe.seed,
+        "max_seq_len": max_seq_len,
+        "dropped_over_len": dropped,
     }
     return Corpus(recipe=recipe, items=items, provenance=provenance)

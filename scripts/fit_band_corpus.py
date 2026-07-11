@@ -107,11 +107,16 @@ def main() -> int:
               f"on_policy={recipe.on_policy_fraction}) -- streaming + on-policy generation...",
               flush=True)
         tc = time.perf_counter()
+        # max_seq_len bounds each item so no single fit outlives the session/checkpoint window
+        # (over-long prompts are dropped, not truncated). Conservative default; tune per model.
+        max_seq_len = int(os.environ.get("JLENS_MAX_SEQ_LEN", 512))
         corpus = C.build_corpus(model, tokenizer, recipe,
-                                on_policy_max_tokens=int(os.environ.get("JLENS_ONPOLICY_TOKENS", 48)))
+                                on_policy_max_tokens=int(os.environ.get("JLENS_ONPOLICY_TOKENS", 48)),
+                                max_seq_len=max_seq_len)
         corpus.to_json(corpus_json)
         print(f"  corpus: {len(corpus.items)} items in {time.perf_counter()-tc:.1f}s  "
               f"{corpus.provenance['strata']}  on_policy={sum(it.on_policy for it in corpus.items)} "
+              f"  dropped_over_len={corpus.provenance['dropped_over_len']} (max_seq_len={max_seq_len}) "
               f"(saved -> {corpus_json})", flush=True)
     tok_lens = [len(it.ids) for it in corpus.items]
     pos_lens = [len(it.positions) for it in corpus.items]

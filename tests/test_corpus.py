@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from jlens_mlx.corpus import (  # noqa: E402
     ABLITERATED_QWEN, SAFETY_BENIGN, SAFETY_HARMFUL, WIKITEXT_CONTROL,
     Corpus, CorpusItem, PositionMask, Recipe, Stratum,
-    _extract_prompt, _weighted_counts, build_positions,
+    _extract_prompt, _prompt_fits, _weighted_counts, build_positions,
 )
 
 
@@ -107,6 +107,44 @@ def test_positions_human_text_short_prefix_clamps():
     # prefix small: start clamps so the range is non-empty
     pos = build_positions(list(range(6)), prompt_prefix_len=6, mask=PositionMask(), skip_first=4)
     assert pos and all(0 <= p < 5 for p in pos)
+
+
+# --- _prompt_fits (sequence-length gate) -----------------------------------------------------
+# Bounds per-item fit cost so no single corpus item outlives a checkpoint window: the chain
+# fitter carries an [C, S, D] cotangent, so wall-clock scales with S (sequence length). Long
+# items (e.g. multi-paragraph math prompts) are DROPPED, not truncated -- a truncated prompt
+# yields meaningless activations.
+
+def test_prompt_fits_no_cap_always_true():
+    assert _prompt_fits(10_000, None) is True
+    assert _prompt_fits(10_000, None, reserve=999) is True
+
+
+def test_prompt_fits_under_cap():
+    assert _prompt_fits(300, 512) is True
+
+
+def test_prompt_fits_over_cap():
+    assert _prompt_fits(600, 512) is False
+
+
+def test_prompt_fits_boundary_exact():
+    # prefix == cap fits (<=), one over does not
+    assert _prompt_fits(512, 512) is True
+    assert _prompt_fits(513, 512) is False
+
+
+def test_prompt_fits_reserve_for_on_policy_completion():
+    # an on-policy item reserves room for the generated span: prefix + reserve must fit
+    assert _prompt_fits(400, 512, reserve=64) is True      # 464 <= 512
+    assert _prompt_fits(480, 512, reserve=64) is False     # 544 > 512
+    assert _prompt_fits(448, 512, reserve=64) is True      # 512 == 512 boundary
+
+
+def test_prompt_fits_negative_reserve_clamped():
+    # a nonsensical negative reserve must not loosen the bound below the prefix itself
+    assert _prompt_fits(512, 512, reserve=-100) is True
+    assert _prompt_fits(513, 512, reserve=-100) is False
 
 
 # --- _extract_prompt -------------------------------------------------------------------------
