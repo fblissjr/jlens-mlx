@@ -27,9 +27,19 @@ CHECKS=(
   check_rmsnorm_seed        # the rms^2-vs-rms^3 seed bug regression guard
 )
 
+# `python -u` (unbuffered) so partial output survives an interruption -- MLX/print is
+# block-buffered when piped, so a killed run would otherwise flush NOTHING and `tee`
+# would leave a 0-byte log (which is exactly how check_qwen3_5_synthetic.log got
+# clobbered on a re-run). Write to a temp file and promote it only on clean success,
+# so a failed/interrupted re-run keeps the previous good log instead of truncating it.
 for chk in "${CHECKS[@]}"; do
   echo "=== $chk ==="
-  uv run python "$HERE/$chk.py" 2>&1 | tee "$OUT/$chk.log"
+  tmp="$OUT/.$chk.partial.log"
+  if uv run python -u "$HERE/$chk.py" 2>&1 | tee "$tmp"; then
+    mv "$tmp" "$OUT/$chk.log"
+  else
+    echo "  !! $chk did NOT complete cleanly -- kept the previous $OUT/$chk.log; partial output in $tmp"
+  fi
   echo
 done
-echo "saved verifier logs -> $OUT  (commit them as the evidence behind the README numbers)"
+echo "saved verifier logs -> $OUT  (the numbers behind the README/report; out/ is gitignored)"

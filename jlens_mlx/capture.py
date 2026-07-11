@@ -1,5 +1,11 @@
-# NOTE: mirrors heylookitsanllm src/heylook_llm/jspace/capture.py -- keep in sync
-# (fit-here / apply-there must be byte-identical). Do not diverge without updating both.
+# NOTE: the fit-side twin of heylookitsanllm src/heylook_llm/jspace/capture.py. Keep the SHARED
+# CORE in sync (ModelAdapter resolution, _Recorder, the block-output convention). They are NOT
+# byte-identical, by design: the apply side adds a fresh-cache path (run_inner / fresh_cache /
+# _resolve_make_cache) that the served hybrid qwen3_5 REQUIRES -- its full-attention block
+# dereferences cache.offset with no None-guard, so a cache-less forward crashes. This fit side
+# runs `ad.inner(...)` cache-less (fitting drives the tail blocks with an explicit mask, not the
+# model's cache path). Both are causal-from-scratch, so they SHOULD yield identical residuals --
+# ASSERTED, not yet numerically verified (fit/apply capture-parity is a go-forward check).
 """Architecture adapter + residual-stream capture for the Jacobian lens.
 
 The lens needs three things from a model, and they live in slightly different
