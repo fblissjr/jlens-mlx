@@ -7,10 +7,12 @@ Public surface (see docs/DESIGN.md):
   - corpus.Recipe / PositionMask  swappable, provenance-stamped fitting corpus
   - lens.JSpaceLens / lens.save / lens.load   (apply: norm OUTSIDE J, real norm at decode)
 
-STATUS (2026-07-10): baseline fitter GREEN on gpt2 (scripts/fit_gpt2_baseline.py).
-Follows anthropics/jacobian-lens (direct autograd, no chain, no closed-form seed). The
-qwen3_5 GDN Metal kernel is a deferred optional speed accelerator (providers/qwen3_5_gdn).
-We port pieces (verified vs mx.vjp), never vendor.
+Design: follows anthropics/jacobian-lens (direct end-to-end autograd, no chain-of-M_l, no
+closed-form norm seed). The exact reverse-mode chain fitter (chain.py) is the verified default;
+the direct VJP is the golden reference. We port pieces (verified vs mx.vjp), never vendor.
+
+Coverage/status is not restated here (it rots -- the old dated STATUS line did): see README.md,
+docs/DESIGN.md, and git history for what's GREEN and which arch families are covered.
 """
 
 __version__ = "0.0.1"

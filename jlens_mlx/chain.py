@@ -107,9 +107,9 @@ def _mask_fn(ad: ModelAdapter, h: mx.array):
 def fit_prompt_chain(model, input_ids, source_layers, *, adapter: ModelAdapter | None = None,
                      target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT,
                      positions=None, chunk_size: int = CHUNK_SIZE_DEFAULT):
-    """UNVERIFIED. Fit `J_l` for ALL `source_layers` in one backward sweep (see module header).
-    Same signature/semantics as `fit.fit_prompt` -- MUST return the same J's (that is the gate).
-    Returns ({l: [D,D] float32}, seq_len)."""
+    """Fit `J_l` for ALL `source_layers` in one backward sweep (see the module header's VERIFIED
+    banner: == direct on qwen3_5+gpt2, cos 1.0). Same signature/semantics as `fit.fit_prompt` --
+    MUST return the same J's (that is the gate). Returns ({l: [D,D] float32}, seq_len)."""
     ad = adapter or ModelAdapter(model)
     target = _resolve_target(ad, target_layer)
     layers = sorted({int(l) for l in source_layers})

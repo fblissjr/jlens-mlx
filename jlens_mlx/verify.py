@@ -1,4 +1,6 @@
-"""Verification: parity vs an oracle, the held-out fidelity gate, and lens diffing.
+"""Verification: the held-out fidelity gate and lens diffing. (Apply-vs-oracle parity is
+exercised by the scripts/check_*.py verifiers -- gpt2/gemma2/qwen3_5 synthetic + chain==direct
+-- not by a function here.)
 
 A lens is not saved unless the fidelity gate passes. See docs/DESIGN.md.
 
@@ -14,12 +16,6 @@ import mlx.core as mx
 
 from .capture import ModelAdapter, capture_residuals
 from .fit import valid_positions
-
-
-def parity_vs_oracle(lens, oracle) -> dict:
-    """MLX apply vs a genuine jlens.apply() oracle: per-layer cosine + top-k
-    overlap. Port migrated_from_scratch/mlx_apply*.py (the V1/V2 gate)."""
-    raise NotImplementedError("port migrated_from_scratch/mlx_apply.py")
 
 
 def _true_logits(ad: ModelAdapter, ids: list[int]) -> mx.array:
