@@ -138,9 +138,25 @@ def main() -> int:
               f"eta ~{eta_min:.0f}m", flush=True)
 
     tf = time.perf_counter()
-    jacobians, n_items = fit_corpus(model, corpus, source_layers=layers, adapter=ad,
-                                    target_layer=target, chunk_size=chunk, progress=_progress,
-                                    checkpoint_dir=ckpt_dir)
+    if os.environ.get("JLENS_FINALIZE"):
+        # Finalize from the checkpoint WITHOUT fitting remaining items -- for when a single item
+        # is longer than the session window (per-item checkpointing can't split one item). Averages
+        # the banked J_sum over the items already done. The dropped items are logged for honesty.
+        from jlens_mlx.fit import _ckpt_load
+        jsum, meta = _ckpt_load(ckpt_dir)
+        if jsum is None:
+            print("JLENS_FINALIZE set but no checkpoint found"); return 2
+        n_items = int(meta["n_done"])
+        done_idx = int(meta["next_idx"])
+        jacobians = {l: jsum[l] / n_items for l in layers}
+        dropped = len(corpus.items) - done_idx
+        print(f"FINALIZE: averaging banked J_sum over {n_items} completed items "
+              f"(dropping {dropped} un-fit item(s) {list(range(done_idx, len(corpus.items)))} -- "
+              f"too long for the session window; see the length-cap note)", flush=True)
+    else:
+        jacobians, n_items = fit_corpus(model, corpus, source_layers=layers, adapter=ad,
+                                        target_layer=target, chunk_size=chunk, progress=_progress,
+                                        checkpoint_dir=ckpt_dir)
     mx.eval(list(jacobians.values()))
     print(f"fit {time.perf_counter()-tf:.1f}s over {n_items} items  "
           f"peak={mx.get_peak_memory()/2**30:.1f}GB", flush=True)
