@@ -222,6 +222,18 @@ def main() -> int:
         print(f"  J_{l}{tag}: top1={m['top1']:.3f} top10={m['topk']:.3f} kl={m['kl']:.3f}", flush=True)
     print(f"  identity_ok={rep['identity_ok']}", flush=True)
 
+    # Disposition-aware ranking (verify.legibility_report): rank band layers by whether their readout
+    # is real CONTENT (' Paris') vs degenerate junk (' __') -- the RIGHT signal for band layers, which
+    # are meant to diverge from the final logits (fidelity_gate's agreement metric misleads here, e.g.
+    # band-5L). Recorded so the lens carries which band layers are legible.
+    leg = verify.legibility_report(model, glens, HELD_OUT, tokenize=tok, tokenizer=tokenizer,
+                                   adapter=ad, top_k=10)
+    in_band_ranked = [l for l in leg["ranked"] if b_lo <= l < b_hi]
+    print("  legibility (band layers, most-meaningful first):", flush=True)
+    for l in in_band_ranked:
+        lm = leg["per_layer"][l]
+        print(f"    J_{l}: legibility={lm['legibility']:.2f} entropy={lm['entropy']:.2f}", flush=True)
+
     try:
         sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
                              capture_output=True, text=True, timeout=5).stdout.strip()
@@ -243,6 +255,8 @@ def main() -> int:
                    "all_on_kernel": (n_over_maxt == 0) if max_t_val is not None else None},
         "fidelity": {str(l): rep["per_layer"][l] for l in layers if l in rep["per_layer"]},
         "fidelity_identity_ok": rep["identity_ok"],
+        "legibility": {str(l): leg["per_layer"][l] for l in layers if l in leg["per_layer"]},
+        "legibility_ranked_band": in_band_ranked,   # band layers, most-meaningful readout first
         "note": "first band-targeted corpus fit; scoped proof (small corpus) -- dense band fit is the overnight run",
     }
     lenslib.save(jacobians, sidecar, out)
