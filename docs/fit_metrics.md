@@ -39,7 +39,7 @@ duckdb, no MLX.
 
 ```sh
 # ingest a run's completed items (idempotent; re-run as more items finish)
-cd <heylook repo> && uv run python <jlens>/scripts/fit_metrics.py --out out/band-n14-fixed
+cd <heylook repo> && uv run python <jlens>/scripts/fit_metrics.py --out <jlens>/out/band-n14-fixed
 
 # print a view without ingesting
 uv run python <jlens>/scripts/fit_metrics.py --query peak_vs_seq
@@ -116,6 +116,28 @@ The through-line: the peak is dominated by something **chunk-independent** we do
 understand, and reasoning about MLX's caching allocator from tensor arithmetic has been
 unreliable. The discipline going forward: **the store measures; we do not predict.** M2
 (real memory instrumentation) is the honest fix for the mispredictions.
+
+### The resolution (measured 2026-07-12)
+
+The peak was never really understood until we measured the metric none of the four
+predictions above looked at: RSS. The SIGKILLs killing the fit at item transitions
+(exit code 137) were not a per-item OOM and not a chunk-size problem — they were the
+macOS memory-pressure / jetsam killer. MLX's caching allocator holds freed buffers and
+never returns them to the OS; `mx.reset_peak_memory()` resets the peak *counter*, not
+the pool, so the process's RSS stays pinned at the run's max-item high-water (~161GB on
+the 27B band) for its entire life, even while fitting a tiny item. A fresh process
+fitting a small item measured ~27GB RSS (just the weights), confirming the persistent
+~161GB figure was the cache pool, not the item's working set. Chunk 128→64 gave only a
+2.8% peak reduction (165.8GB vs 161.1GB on twin items) — confirming (3) above was
+measuring the wrong lever: chunk is free on speed but does not touch the pool.
+
+The fix: `mx.clear_cache()` between items in `fit_corpus` (fit.py), which actually frees
+the pool and drops RSS to ~27GB between items, at negligible cost (re-allocation is
+sub-second against a ~40-min item). Residual risk: during a big item's compute the
+process still holds ~161GB and remains vulnerable to external memory pressure.
+
+This is the fifth data point in the same discipline as the four mispredictions above:
+the store — and here, an RSS monitor — measures; we do not predict.
 
 ## 5. Build order (free wins first)
 

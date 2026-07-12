@@ -135,6 +135,28 @@ Two tabs: **Run** (progress, ETA, peak memory, stall indicator, log tail) and
 token + position counts, grouped so the harmful/benign contrast is adjacent, with the
 diversity numbers up top). It only reads the sidecar files — it cannot perturb the fit.
 
+### Metrics store + analytics dashboard
+
+Two more tools, both documented in full in [fit_metrics.md](./fit_metrics.md). Both need
+the **heylook venv** (duckdb lives there, not the jlens venv) — run them from the heylook
+repo:
+
+```sh
+# ingest a run's completed items into the shared DuckDB store (idempotent; re-run as
+# more items finish)
+cd <heylook repo> && uv run python <jlens>/scripts/fit_metrics.py --out out/band-n14-fixed
+
+# print a view without ingesting
+uv run python <jlens>/scripts/fit_metrics.py --query peak_vs_seq
+uv run python <jlens>/scripts/fit_metrics.py --query throughput
+
+# analytics dashboard over the accumulated store, :8766
+uv run python <jlens>/scripts/fit_metrics_ui.py --db <jlens>/out/fit_metrics.duckdb
+```
+
+`fit_monitor.py` is live/per-run visibility while a fit is in flight; `fit_metrics.py` +
+`fit_metrics_ui.py` are the durable, cross-run analytical record.
+
 ### Is it progressing vs spinning?
 
 ```sh
@@ -154,7 +176,7 @@ time matches the pre-instrumentation runs — same kernel, same math.
 | 0 | fit completed | stop (done) |
 | 2 | config error (no `JLENS_MODEL`; `JLENS_FINALIZE` with no checkpoint) | stop (retry won't help) |
 | 3 | corpus diversity gate failed (degenerate) | stop (retry won't help — fix the corpus) |
-| other / signal | native crash, killed, etc. | restart after 15s, up to `JLENS_MAX_RESTARTS` |
+| other / signal | native crash, killed, etc. (137 specifically = SIGKILL, i.e. the macOS memory-pressure killer — see §5) | restart after 15s, up to `JLENS_MAX_RESTARTS` |
 
 ---
 
@@ -182,6 +204,34 @@ degenerate corpus cost 7 GPU-hours once.
 
 **Resume did the wrong thing.** A run "skips build" because `JLENS_OUT` pointed at a
 dir with an existing `ckpt/corpus.json`. Use a fresh `JLENS_OUT` for a clean run.
+
+**Exit 137 (SIGKILL) at an item transition — macOS memory-pressure kill, not an
+OOM.** The process dies between items with exit code 137 and the supervisor restarts
+it (§4). This is a distinct failure mode from the native-crash class above. Root
+cause: MLX's caching allocator holds freed buffers and never returns them to the OS.
+`mx.reset_peak_memory()` (already called at every item start) resets the peak
+*counter*, not the pool — so the process's RSS stays pinned at the run's max-item
+high-water (~161GB on the 27B band) for its entire life, even while fitting a tiny
+item. On a 192GB machine that leaves ~30GB for the OS, and a transient spike at an
+item transition trips the jetsam killer. Confirmed by measuring a fresh process
+fitting a tiny item at ~27GB RSS (just the model weights) — the persistent ~161GB
+figure was the cache pool, not the item's working set. This behaves like a leak (RSS
+pinned high, kills the process) but is technically cache retention (reclaimable,
+bounded at the peak) — the distinction is what makes it fixable.
+
+Chunk size is **not** the lever here: dropping `JLENS_CHUNK` 128→64 gave only a 2.8%
+peak reduction (165.8GB vs 161.1GB measured on twin items) — chunk helps speed, not
+this failure mode.
+
+**Fix**: `mx.clear_cache()` between items in `fit_corpus` (fit.py) actually releases
+the pool, dropping RSS to ~27GB between items — the next item re-allocates from a cold
+pool in under a second, negligible against a ~40-min item.
+
+**Residual risk**: during a big item's ~40-min compute the process still holds
+~161GB and is vulnerable to EXTERNAL memory pressure — avoid running heavy memory
+apps alongside a long fit (extra browser tabs, other model loads) while a large item
+is in flight. The supervisor already auto-restarts a 137, but a persistent
+external-pressure situation could loop.
 
 ---
 
