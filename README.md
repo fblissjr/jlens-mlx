@@ -62,7 +62,10 @@ whole-fit J cos 1.000000 vs the pure-autodiff path, ~8x faster on even a tiny mo
   corpus → `fit_corpus` over the product band (layers 16–47) → gate → provenanced save. Timestamped
   progress + a positions-weighted ETA + a `progress.json` sidecar + a hang watchdog make a multi-hour
   run observable; for an overnight run wrap it in `scripts/fit_band_supervisor.sh`, which restarts on
-  an unexpected exit (native crash) but stops on success/config-error/degenerate-corpus.
+  an unexpected exit (native crash) but stops on success/config-error/degenerate-corpus. Watch a live
+  run in a browser with `scripts/fit_monitor.py` — a read-only, stdlib-only local dashboard over
+  `ckpt/progress.json`/`ckpt.json`/`corpus.json` + the run log (`uv run python scripts/fit_monitor.py
+  --out out/<run>`).
 
 We do **not** vendor jlens-qwen36. We port specific pieces (verified vs `mx.vjp`, attributed
 per-file); its only role is an *optional* GDN speed kernel for the 27B qwen. Reference clones
