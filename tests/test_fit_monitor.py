@@ -208,6 +208,23 @@ def test_parse_decoded_md_empty_input():
     assert parse_decoded_md("") == []
 
 
+def test_parse_decoded_md_prompt_marker_without_response_marker_is_stripped():
+    # Edge case: an item block has the "--- prompt ... ---" marker but no matching
+    # "--- model's on-policy response ..." marker (e.g. the last on-policy item in a
+    # partially-written file). The marker line itself must still be stripped from the
+    # prompt text, not leaked in as literal content.
+    md = (
+        "## item 0  [stratum=safety  on_policy=True  tokens=3  masked_positions=2]\n"
+        "--- prompt (through the generation prompt) ---\n"
+        "foo\n"
+    )
+    parsed = parse_decoded_md(md)
+    assert len(parsed) == 1
+    assert parsed[0]["prompt"] == "foo"
+    assert parsed[0]["completion"] is None
+    assert "---" not in parsed[0]["prompt"]
+
+
 # --- safe_path (path-traversal guard) -----------------------------------------------------------
 
 def test_safe_path_accepts_legit_in_root_filename(tmp_path):

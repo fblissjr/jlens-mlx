@@ -153,6 +153,12 @@ def parse_decoded_md(text: str) -> list[dict]:
             r_start = block.index(RESPONSE_MARKER)
             prompt = block[p_start:r_start].strip("\n")
             completion = block[r_start + len(RESPONSE_MARKER):].strip("\n")
+        elif PROMPT_MARKER in block:
+            # off-policy (human-text) items, or the last item in the file with no trailing
+            # response section -- still strip the marker line itself, just no completion split.
+            p_start = block.index(PROMPT_MARKER) + len(PROMPT_MARKER)
+            prompt = block[p_start:].strip("\n")
+            completion = None
         else:
             prompt = block.strip("\n")
             completion = None
