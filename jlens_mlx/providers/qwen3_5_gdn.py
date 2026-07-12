@@ -326,14 +326,26 @@ def _kernel_eligible(T, Hk, Hv, Dk, Dv, g, mask) -> bool:
 
 
 def _fit_gated_delta_update(q, k, v, a, b, A_log, dt_bias,
-                            state=None, mask=None, use_kernel=True):
+                            state=None, mask=None, use_kernel=True,
+                            **_future_kwargs):
     """Drop-in for ``gated_delta_update`` on the fit path (see gdn_fit_patch).
 
     Kernel-eligible: stock fused forward + custom Metal VJP. Otherwise: the
     stock differentiable ops loop. The returned state is only meaningful on the
     ops path; kernel path returns stop_gradient(state_in) -- callers under the
     fit patch are uncached (cache=None) and never read it.
+
+    ``**_future_kwargs`` absorbs keywords upstream later adds to the real
+    signature (e.g. the ``training=`` flag an open mlx-lm PR passes
+    unconditionally at every qwen3_5 call site), so a pin bump can't
+    TypeError mid-fit. The fit path is differentiable-by-construction, so
+    such flags are safely ignored -- but warn once so drift is visible.
     """
+    if _future_kwargs and not getattr(_fit_gated_delta_update, "_warned", False):
+        _fit_gated_delta_update._warned = True  # type: ignore[attr-defined]
+        print(f"gdn_fit_patch: ignoring unknown gated_delta_update kwargs "
+              f"{sorted(_future_kwargs)} (upstream signature drift -- verify fit parity)",
+              flush=True)
     from mlx_lm.models.gated_delta import compute_g, gated_delta_ops
 
     beta = mx.sigmoid(b)
