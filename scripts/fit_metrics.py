@@ -414,7 +414,9 @@ def run_query(db_path: Path, query_name: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", required=True, help="Path to a fit run's out dir (e.g. out/band-n14-fixed)")
+    parser.add_argument(
+        "--out", required=False, help="Path to a fit run's out dir (e.g. out/band-n14-fixed)"
+    )
     parser.add_argument("--db", default=str(_DEFAULT_DB_PATH), help="Path to the shared DuckDB store")
     parser.add_argument(
         "--query",
@@ -424,14 +426,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    out_dir = Path(args.out)
-    if not out_dir.is_absolute():
-        out_dir = Path.cwd() / out_dir
     db_path = Path(args.db)
 
     if args.query:
         run_query(db_path, args.query)
         return 0
+
+    if not args.out:
+        parser.error("--out is required unless --query is given")
+
+    out_dir = Path(args.out)
+    if not out_dir.is_absolute():
+        out_dir = Path.cwd() / out_dir
 
     summary = ingest(out_dir=out_dir, db_path=db_path)
     print(f"run_id: {summary['run_id']}")
