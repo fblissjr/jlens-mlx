@@ -268,9 +268,11 @@ def main() -> int:
            f"(dropping {dropped} un-fit item(s) {list(range(done_idx, len(corpus.items)))} -- "
            f"too long for the session window; see the length-cap note)")
     else:
+        _max_fit_seq = int(os.environ["JLENS_MAX_FIT_SEQ"]) if os.environ.get("JLENS_MAX_FIT_SEQ") else None
         jacobians, n_items = fit_corpus(model, corpus, source_layers=layers, adapter=ad,
                                         target_layer=target, chunk_size=chunk, progress=_progress,
-                                        checkpoint_dir=ckpt_dir, heartbeat=_rearm_watchdog)
+                                        checkpoint_dir=ckpt_dir, heartbeat=_rearm_watchdog,
+                                        max_fit_seq=_max_fit_seq)
     mx.eval(list(jacobians.values()))
     _p(f"fit {time.perf_counter()-tf:.1f}s over {n_items} items  "
        f"peak={mx.get_peak_memory()/2**30:.1f}GB")

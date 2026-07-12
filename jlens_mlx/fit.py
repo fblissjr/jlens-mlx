@@ -284,7 +284,7 @@ def _ckpt_load(checkpoint_dir):
 def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = None,
                target_layer: int | None = None, chunk_size: int = CHUNK_SIZE_DEFAULT,
                progress=None, use_chain: bool = True, checkpoint_dir=None, resume: bool = True,
-               heartbeat=None, heartbeat_interval: float = 30.0):
+               heartbeat=None, heartbeat_interval: float = 30.0, max_fit_seq: int | None = None):
     """Average `J_l` over a materialized `Corpus` (jlens_mlx.corpus), using each item's own
     role-aware position mask (assistant/think span for on-policy prompts, content span for
     human-text). Returns ({l: [D,D]}, n_items). The corpus provenance should be stamped onto
@@ -347,6 +347,23 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
     for i, item in enumerate(corpus.items):
         if i < start_idx:
             continue  # already done in a prior (killed) run
+        if max_fit_seq is not None and len(item.ids) > max_fit_seq:
+            # Fit-time sequence cap: this item's single-item working set would exceed unified
+            # memory and OOM the process (peak scales ~linearly with seq -- measured ~1.7GB/token
+            # on the 27B band, so e.g. a 126-token item projects to ~245GB > 192GB). clear_cache
+            # can't help a single item that's intrinsically too big. Skip it -- the lens averages
+            # over the rest -- and advance the checkpoint past it so resume doesn't re-hit it.
+            if checkpoint_dir and acc is not None:
+                _ckpt_save(checkpoint_dir, acc, {"next_idx": i + 1, "n_done": n, "layers": layers,
+                                                 "target": target, "chunk_size": chunk_size,
+                                                 "use_chain": use_chain, "n_total": n_total})
+            if progress:
+                progress({"i": i, "n_total": n_total, "done": n, "skipped": True,
+                          "seq_len": len(item.ids), "n_pos": len(item.positions),
+                          "on_policy": item.on_policy, "secs": 0.0,
+                          "elapsed": time.perf_counter() - t_start, "eta_secs": None,
+                          "sec_per_pos": None, "item_sec_per_pos": None, "peak_gb": None})
+            continue
         t0 = time.perf_counter()
         mx.reset_peak_memory()
         positions_remaining = sum(len(it.positions) for it in corpus.items[i + 1:])
