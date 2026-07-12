@@ -24,11 +24,11 @@ verbatim (its data — `*.npz` / `*.safetensors` — is gitignored). Disposition
 | `mlx_apply.py` | fully superseded by `scripts/check_gpt2_parity.py` | **DONE** — removed (content remains in git history) |
 | `probe_thread.py`, `verify_endpoint.py` | test the running heylookitsanllm endpoint / MLX thread semantics, not this repo — import `heylook_llm.*` and cannot run here | **DONE** — removed; belong in the server repo as real server tests, not reproduced here (content remains in git history) |
 | `validate_moe.py`, `verify_router.py`, `verify_module.py` | correction: an earlier pass of this table miscategorized these as "research verification → `tests/` here" — all three actually import `heylook_llm.*` (a different project) and cannot run in this repo | `verify_module.py` is foreign/superseded like `mlx_apply.py` — **DONE**, removed. `validate_moe.py` and `verify_router.py` have reference value — **DONE**, moved to `internal/reference/` (gitignored, local-only, untracked) |
-| `mlx_apply_gemma.py`, `lens_gemma22b.*`, `oracle_gemma22b_*.*`, `README.md` | gemma2 real-weights parity gate | **PENDING** — left in place, tracked (binaries stay gitignored), awaiting a future gemma2 parity-gate session; not built yet |
+| `mlx_apply_gemma.py`, `lens_gemma22b.*`, `oracle_gemma22b_*.*`, `README.md` | gemma2 real-weights parity gate | **ARCHIVED 2026-07-12** — owner decision: fully out of version control. Moved to `internal/archive/migrated_from_scratch/` (local-only, gitignored). Recoverable from git history; the gitignored binaries are regenerable via `scripts/make_oracle.py` + `scripts/convert_lens.py` (torch venv). A future gemma2 parity gate starts from that archive or regenerates |
 
-After this pass, `migrated_from_scratch/` holds only the gemma set above plus its own
-`README.md` — everything else has graduated into this repo's real layout
-(`tests/golden/`, `scripts/`) or been removed/relocated per the corrected table.
+After this pass the folder was DISSOLVED entirely (2026-07-12): everything graduated
+into the repo's real layout (`tests/golden/`, `scripts/`), was removed (recoverable from
+git history), or was archived locally under `internal/archive/migrated_from_scratch/`.
 
 ## 2. Modularize the vendored `qwen3_5` seed
 

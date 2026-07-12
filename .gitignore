@@ -230,8 +230,6 @@ __marimo__/
 # fixtures under tests/golden/, carry binary data; JSON/code sidecars stay
 # tracked. (Already covered by the blanket *.safetensors/*.npz rules above --
 # kept explicit here for discoverability.)
-migrated_from_scratch/*.npz
-migrated_from_scratch/*.safetensors
 tests/golden/*.npz
 tests/golden/*.safetensors
 
