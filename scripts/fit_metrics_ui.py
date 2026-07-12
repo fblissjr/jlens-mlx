@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -48,17 +49,31 @@ DEFAULT_DB = REPO_ROOT / "out" / "fit_metrics.duckdb"
 
 # --- pure, importable, unit-testable functions -------------------------------------------------
 
-def open_ro(db_path: Path) -> duckdb.DuckDBPyConnection | None:
+def open_ro(
+    db_path: Path, *, attempts: int = 4, delay: float = 0.25
+) -> duckdb.DuckDBPyConnection | None:
     """Open a FRESH read-only connection to `db_path`, or None if the file doesn't exist yet (the
     fit hasn't written a store; `out/fit_metrics.duckdb` fills in overnight). Never creates the
     file -- checking existence first avoids duckdb's own "file not found" noise, and read_only=True
-    means this call can never write even if the check raced a create."""
+    means this call can never write even if the check raced a create.
+
+    Retries a short, bounded number of times on lock-shaped `duckdb.Error`s -- an ingest holds a
+    brief exclusive write lock, and a poll landing in that window should retry rather than flicker
+    to an empty page. A non-lock error, or exhausting all retries, still degrades to None -- this
+    tool must never raise."""
     if not db_path.exists():
         return None
-    try:
-        return duckdb.connect(str(db_path), read_only=True)
-    except duckdb.Error:
-        return None
+    for attempt in range(attempts):
+        try:
+            return duckdb.connect(str(db_path), read_only=True)
+        except duckdb.Error as e:
+            msg = str(e).lower()
+            if "lock" not in msg and "being used by another" not in msg:
+                return None
+            if attempt == attempts - 1:
+                return None
+            time.sleep(delay)
+    return None
 
 
 def rows_as_dicts(con: duckdb.DuckDBPyConnection, sql: str, params: list | None = None) -> list[dict]:

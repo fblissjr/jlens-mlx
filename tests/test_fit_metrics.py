@@ -300,3 +300,80 @@ def test_git_sha_lookup_does_not_hardcode_absolute_path():
     # best-effort git sha lookup must derive repo root from __file__, not a literal path.
     sha = fit_metrics.get_git_sha()
     assert sha is None or isinstance(sha, str)
+
+
+# --- _connect lock-retry wrapper -------------------------------------------------------------
+
+def test_connect_retries_on_lock_error_then_succeeds(tmp_path, monkeypatch):
+    db_path = tmp_path / "retry.duckdb"
+    real_connect = duckdb.connect
+    calls = {"n": 0}
+
+    def fake_connect(path, read_only=False):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise duckdb.IOException("Conflicting lock is held on file: could not set lock")
+        return real_connect(path, read_only=read_only)
+
+    monkeypatch.setattr(fit_metrics.duckdb, "connect", fake_connect)
+    monkeypatch.setattr(fit_metrics.time, "sleep", lambda *a, **k: None)
+
+    con = fit_metrics._connect(db_path, attempts=5, delay=0)
+    try:
+        assert calls["n"] == 3
+    finally:
+        con.close()
+
+
+def test_connect_reraises_non_lock_error_immediately(tmp_path, monkeypatch):
+    db_path = tmp_path / "retry.duckdb"
+    calls = {"n": 0}
+
+    def fake_connect(path, read_only=False):
+        calls["n"] += 1
+        raise duckdb.Error("syntax error near foo")
+
+    monkeypatch.setattr(fit_metrics.duckdb, "connect", fake_connect)
+    monkeypatch.setattr(fit_metrics.time, "sleep", lambda *a, **k: None)
+
+    with pytest.raises(duckdb.Error):
+        fit_metrics._connect(db_path, attempts=5, delay=0)
+    assert calls["n"] == 1  # no retry on a non-lock error
+
+
+def test_connect_raises_system_exit_after_exhausting_attempts(tmp_path, monkeypatch):
+    db_path = tmp_path / "retry.duckdb"
+    calls = {"n": 0}
+
+    def fake_connect(path, read_only=False):
+        calls["n"] += 1
+        raise duckdb.IOException("Conflicting lock is held on file: could not set lock")
+
+    monkeypatch.setattr(fit_metrics.duckdb, "connect", fake_connect)
+    monkeypatch.setattr(fit_metrics.time, "sleep", lambda *a, **k: None)
+
+    with pytest.raises(SystemExit, match=r"(?i)locked.*another process"):
+        fit_metrics._connect(db_path, attempts=3, delay=0)
+    assert calls["n"] == 3
+
+
+# --- run_query() read-only behavior ------------------------------------------------------------
+
+def test_run_query_errors_cleanly_when_db_missing(tmp_path):
+    db_path = tmp_path / "does-not-exist.duckdb"
+    with pytest.raises(SystemExit, match=r"no DuckDB store"):
+        fit_metrics.run_query(db_path, "peak_vs_seq")
+
+
+def test_run_query_opens_read_only(tmp_path):
+    out_dir = _build_fixture(tmp_path)
+    db_path = tmp_path / "ro_fit_metrics.duckdb"
+    fit_metrics.ingest(out_dir=out_dir, db_path=db_path)
+
+    # A read-only run_query() must not hold an exclusive lock -- a second read-only connection
+    # opened concurrently (simulating the dashboard) must succeed.
+    probe = duckdb.connect(str(db_path), read_only=True)
+    try:
+        fit_metrics.run_query(db_path, "throughput")  # must not raise/deadlock
+    finally:
+        probe.close()

@@ -22,6 +22,7 @@ import duckdb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import scripts.fit_metrics_ui as fit_metrics_ui  # noqa: E402
 from scripts.fit_metrics_ui import (  # noqa: E402
     build_handler, fetch_peak_vs_seq, fetch_runs, fetch_throughput, open_ro,
 )
@@ -221,6 +222,66 @@ def test_smoke_missing_db_file_does_not_500(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+# --- open_ro() lock-retry behavior --------------------------------------------------------------
+
+def test_open_ro_retries_on_lock_error_then_succeeds(tmp_path, monkeypatch):
+    db_path = tmp_path / "retry.duckdb"
+    duckdb.connect(str(db_path)).close()  # a real, valid (empty) store -- open_ro() needs one
+    real_connect = duckdb.connect
+    calls = {"n": 0}
+
+    def fake_connect(path, read_only=False):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise duckdb.IOException("Conflicting lock is held on file: could not set lock")
+        return real_connect(path, read_only=read_only)
+
+    monkeypatch.setattr(fit_metrics_ui.duckdb, "connect", fake_connect)
+    monkeypatch.setattr(fit_metrics_ui.time, "sleep", lambda *a, **k: None)
+
+    con = open_ro(db_path, attempts=5, delay=0)
+    try:
+        assert con is not None
+        assert calls["n"] == 3
+    finally:
+        if con is not None:
+            con.close()
+
+
+def test_open_ro_returns_none_on_non_lock_error_without_burning_retries(tmp_path, monkeypatch):
+    db_path = tmp_path / "retry.duckdb"
+    db_path.touch()
+    calls = {"n": 0}
+
+    def fake_connect(path, read_only=False):
+        calls["n"] += 1
+        raise duckdb.Error("syntax error near foo")
+
+    monkeypatch.setattr(fit_metrics_ui.duckdb, "connect", fake_connect)
+    monkeypatch.setattr(fit_metrics_ui.time, "sleep", lambda *a, **k: None)
+
+    con = open_ro(db_path, attempts=5, delay=0)
+    assert con is None
+    assert calls["n"] == 1  # never raises, and doesn't retry a non-lock error
+
+
+def test_open_ro_returns_none_after_exhausting_retries_on_persistent_lock(tmp_path, monkeypatch):
+    db_path = tmp_path / "retry.duckdb"
+    db_path.touch()
+    calls = {"n": 0}
+
+    def fake_connect(path, read_only=False):
+        calls["n"] += 1
+        raise duckdb.IOException("Conflicting lock is held on file: could not set lock")
+
+    monkeypatch.setattr(fit_metrics_ui.duckdb, "connect", fake_connect)
+    monkeypatch.setattr(fit_metrics_ui.time, "sleep", lambda *a, **k: None)
+
+    con = open_ro(db_path, attempts=3, delay=0)
+    assert con is None  # never raises
+    assert calls["n"] == 3
 
 
 def test_smoke_empty_db_no_tables_does_not_500(tmp_path):

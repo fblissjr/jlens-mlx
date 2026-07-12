@@ -30,6 +30,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,32 @@ _DONE_RE = re.compile(
 _MODEL_RE = re.compile(r"JLENS_MODEL[=:\s]+(?P<path>\S+)")
 
 _DEFAULT_D_MODEL = 5120
+
+
+# --- lock-aware connection ---------------------------------------------------------------------
+
+def _connect(
+    db_path: Path, *, read_only: bool = False, attempts: int = 12, delay: float = 0.4
+) -> duckdb.DuckDBPyConnection:
+    """Connects to db_path, retrying on DuckDB lock contention (another process holds the
+    file). Non-lock errors re-raise immediately. Exhausting attempts raises SystemExit with
+    a message telling the operator what to do."""
+    for attempt in range(attempts):
+        try:
+            return duckdb.connect(str(db_path), read_only=read_only)
+        except duckdb.Error as e:
+            msg = str(e).lower()
+            if "lock" not in msg and "being used by another" not in msg:
+                raise
+            if attempt == attempts - 1:
+                raise SystemExit(
+                    f"the DuckDB store at {db_path} is locked by another process "
+                    f"(the dashboard or another ingest?) -- retried {attempts}x; "
+                    "close it or wait, then re-run."
+                )
+            time.sleep(delay)
+    # unreachable, but keeps type-checkers happy
+    raise SystemExit(f"the DuckDB store at {db_path} could not be opened.")
 
 
 # --- surrogate keys --------------------------------------------------------------------------
@@ -381,7 +408,7 @@ def ingest(out_dir: Path, db_path: Path) -> dict[str, Any]:
     fact_rows = build_fact_rows(out_dir, log_text, corpus, ckpt)
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(str(db_path))
+    con = _connect(db_path)
     try:
         ensure_schema(con)
         upsert_dim_run(con, dim_row)
@@ -403,9 +430,14 @@ def run_query(db_path: Path, query_name: str) -> None:
     if view is None:
         raise SystemExit(f"unknown --query {query_name!r}; expected one of {sorted(view_by_name)}")
 
-    con = duckdb.connect(str(db_path))
+    if not db_path.exists():
+        raise SystemExit(f"no DuckDB store at {db_path} yet -- run an ingest first.")
+
+    # Read-only: never issues DDL. ensure_schema() would fail on a read-only connection anyway
+    # (CREATE TABLE/VIEW), and the existence guard above already ensures a prior ingest created
+    # the schema.
+    con = _connect(db_path, read_only=True)
     try:
-        ensure_schema(con)
         df = con.execute(f"SELECT * FROM {view}").df()
         print(df.to_string(index=False))
     finally:
@@ -443,7 +475,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"run_id: {summary['run_id']}")
     print(f"fact rows for this run: {summary['fact_count']}")
 
-    con = duckdb.connect(str(db_path))
+    # Read-only: ingest() above already wrote + closed its connection, so the schema is
+    # guaranteed to exist -- no existence guard needed here (unlike run_query()).
+    con = _connect(db_path, read_only=True)
     try:
         df = con.execute(
             "SELECT * FROM v_peak_vs_seq WHERE run_id = ?", [summary["run_id"]]
