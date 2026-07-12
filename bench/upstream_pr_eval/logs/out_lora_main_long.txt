@@ -1,0 +1,46 @@
+Loading pretrained model
+Loading datasets
+Training
+[34m╭─[0m[34m [0m[1;35mmlx_lm.lora[0m[34m [0m[34m───────────────────────────────────────────────────────────────────────────────────────────────────────[0m[34m─╮[0m
+[34m│[0m    [39mmodel        [0m   [1m<MODEL_DIR>/Qwen3.5-27B-heretic-8bit-mlx[0m             [34m│[0m
+[34m│[0m    [39mtype         [0m   [1mlora · 16 layers · rank 8[0m                                                                         [34m│[0m
+[34m│[0m    [39mdataset      [0m   [1mdata_lora_long[0m                                                                                    [34m│[0m
+[34m│[0m    [39moptimizer    [0m   [1madam · lr 1.0e-05[0m                                                                                 [34m│[0m
+[34m│[0m    [39mbatch · iters[0m   [1m1 · 10[0m                                                                                            [34m│[0m
+[34m│[0m    [39mmax seq      [0m   [1m1,024[0m                                                                                             [34m│[0m
+[34m╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯[0m
+Trainable parameters: 0.054% (14.591M/26895.994M)
+  [1miter   train_loss     tok/s     tokens[0m
+  [38;5;244m   1[0m    [1;35mval[0m [1m1.444[0m    [38;5;244m3.54s[0m
+  [38;5;244m   1[0m    [1;32m1.459 ▼[0m    [1m   29[0m    [38;5;244m  0.7k[0m
+  [38;5;244m   2[0m    [1;32m1.282 ▼[0m    [1m   28[0m    [38;5;244m  1.3k[0m
+  [38;5;244m   3[0m    [1;32m1.122 ▼[0m    [1m   59[0m    [38;5;244m  2.0k[0m
+  [38;5;244m   4[0m    [1;32m1.094 ▼[0m    [1m   29[0m    [38;5;244m  2.7k[0m
+  [38;5;244m   5[0m    [1;32m1.008 ▼[0m    [1m   60[0m    [38;5;244m  3.4k[0m
+  [38;5;244m   6[0m    [1;32m0.959 ▼[0m    [1m   60[0m    [38;5;244m  4.0k[0m
+  [38;5;244m   7[0m    [1;32m0.954 ▼[0m    [1m   62[0m    [38;5;244m  4.7k[0m
+  [38;5;244m   8[0m    [1;32m0.905 ▼[0m    [1m   61[0m    [38;5;244m  5.4k[0m
+  [38;5;244m   9[0m    [1;32m0.884 ▼[0m    [1m   60[0m    [38;5;244m  6.1k[0m
+  [38;5;244m  10[0m    [1;35mval[0m [1m0.858[0m    [38;5;244m3.29s[0m
+  [38;5;244m  10[0m    [1;32m0.839 ▼[0m    [1m   62[0m    [38;5;244m  6.7k[0m
+[1;34mtrain[0m [34m██████████████████████████████[0m [1;34m100%[0m [38;5;244m·[0m [1;34m   10[0m[38;5;244m/10[0m
+
+--STDERR--
+      159.64 real        70.95 user        55.22 sys
+         36515217408  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             2282634  page reclaims
+                  34  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   5  voluntary context switches
+              720803  involuntary context switches
+        962198221346  instructions retired
+        406515032612  cycles elapsed
+        117480205024  peak memory footprint

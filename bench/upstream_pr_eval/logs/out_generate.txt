@@ -1,0 +1,21 @@
+== main ==
+  [warm] Prompt: 450 tokens, 175.344 tokens-per-sec
+  [warm] Generation: 200 tokens, 21.459 tokens-per-sec
+  [warm] Peak memory: 29.652 GB
+  [meas] Prompt: 450 tokens, 180.436 tokens-per-sec
+  [meas] Generation: 200 tokens, 21.619 tokens-per-sec
+  [meas] Peak memory: 29.652 GB
+== 1389 ==
+  [warm] Prompt: 450 tokens, 180.879 tokens-per-sec
+  [warm] Generation: 200 tokens, 21.513 tokens-per-sec
+  [warm] Peak memory: 29.652 GB
+  [meas] Prompt: 450 tokens, 179.413 tokens-per-sec
+  [meas] Generation: 200 tokens, 21.592 tokens-per-sec
+  [meas] Peak memory: 29.652 GB
+== 1217 ==
+  [warm] Prompt: 450 tokens, 180.016 tokens-per-sec
+  [warm] Generation: 200 tokens, 21.611 tokens-per-sec
+  [warm] Peak memory: 29.652 GB
+  [meas] Prompt: 450 tokens, 180.422 tokens-per-sec
+  [meas] Generation: 200 tokens, 21.640 tokens-per-sec
+  [meas] Peak memory: 29.652 GB

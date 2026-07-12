@@ -1,0 +1,27 @@
+mlx 0.32.0
+
+smallGQA T=64  (ref = sequential gated_delta_ops autodiff)
+   y     metal[rel=1.47e-07] python[rel=0.00e+00] ours[rel=1.47e-07]
+   dq  metal-vs-ref[rel=2.21e-07 cos=1.0000000]  python-vs-ref[rel=0.00e+00 cos=1.0000000]  ours-vs-ref[rel=1.84e-07 cos=1.0000000]  metal-vs-ours[rel=7.36e-08]
+   dk  metal-vs-ref[rel=9.56e-08 cos=1.0000000]  python-vs-ref[rel=0.00e+00 cos=1.0000000]  ours-vs-ref[rel=1.53e-07 cos=1.0000000]  metal-vs-ours[rel=7.65e-08]
+   dv  metal-vs-ref[rel=1.52e-07 cos=1.0000001]  python-vs-ref[rel=0.00e+00 cos=1.0000001]  ours-vs-ref[rel=1.52e-07 cos=1.0000001]  metal-vs-ours[rel=0.00e+00]
+   da  metal-vs-ref[rel=7.46e-08 cos=1.0000001]  python-vs-ref[rel=0.00e+00 cos=1.0000001]  ours-vs-ref[rel=7.46e-08 cos=1.0000001]  metal-vs-ours[rel=5.60e-08]
+   db  metal-vs-ref[rel=2.24e-07 cos=1.0000000]  python-vs-ref[rel=0.00e+00 cos=1.0000000]  ours-vs-ref[rel=2.24e-07 cos=1.0000001]  metal-vs-ours[rel=1.12e-07]
+
+real27B T=64  (ref = sequential gated_delta_ops autodiff)
+   y     metal[rel=1.56e-07] python[rel=2.44e-09] ours[rel=1.56e-07]
+   dq  metal-vs-ref[rel=1.77e-07 cos=1.0000001]  python-vs-ref[rel=5.54e-09 cos=1.0000001]  ours-vs-ref[rel=1.77e-07 cos=1.0000001]  metal-vs-ours[rel=1.33e-07]
+   dk  metal-vs-ref[rel=1.37e-07 cos=1.0000000]  python-vs-ref[rel=5.69e-09 cos=1.0000000]  ours-vs-ref[rel=1.82e-07 cos=1.0000000]  metal-vs-ours[rel=1.42e-07]
+   dv  metal-vs-ref[rel=1.29e-07 cos=1.0000000]  python-vs-ref[rel=2.15e-08 cos=1.0000000]  ours-vs-ref[rel=1.29e-07 cos=1.0000000]  metal-vs-ours[rel=2.15e-08]
+   da  metal-vs-ref[rel=1.86e-07 cos=1.0000001]  python-vs-ref[rel=3.82e-09 cos=1.0000000]  ours-vs-ref[rel=1.86e-07 cos=0.9999999]  metal-vs-ours[rel=2.32e-07]
+   db  metal-vs-ref[rel=2.22e-07 cos=1.0000000]  python-vs-ref[rel=1.38e-08 cos=1.0000000]  ours-vs-ref[rel=1.11e-07 cos=1.0000001]  metal-vs-ours[rel=2.22e-07]
+
+real27B T=128  (ref = sequential gated_delta_ops autodiff)
+   y     metal[rel=1.61e-07] python[rel=1.26e-09] ours[rel=1.61e-07]
+   dq  metal-vs-ref[rel=1.70e-07 cos=1.0000001]  python-vs-ref[rel=1.33e-09 cos=1.0000001]  ours-vs-ref[rel=2.55e-07 cos=1.0000001]  metal-vs-ours[rel=2.12e-07]
+   dk  metal-vs-ref[rel=1.69e-07 cos=1.0000000]  python-vs-ref[rel=2.64e-09 cos=1.0000000]  ours-vs-ref[rel=1.90e-07 cos=1.0000000]  metal-vs-ours[rel=2.54e-07]
+   dv  metal-vs-ref[rel=1.42e-07 cos=0.9999999]  python-vs-ref[rel=3.33e-09 cos=0.9999999]  ours-vs-ref[rel=1.42e-07 cos=0.9999999]  metal-vs-ours[rel=1.78e-08]
+   da  metal-vs-ref[rel=2.00e-07 cos=1.0000000]  python-vs-ref[rel=4.10e-10 cos=0.9999999]  ours-vs-ref[rel=2.00e-07 cos=1.0000000]  metal-vs-ours[rel=2.00e-07]
+   db  metal-vs-ref[rel=1.29e-07 cos=0.9999999]  python-vs-ref[rel=6.74e-10 cos=0.9999999]  ours-vs-ref[rel=1.29e-07 cos=0.9999999]  metal-vs-ours[rel=8.63e-08]
+
+DONE F

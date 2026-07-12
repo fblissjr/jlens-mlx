@@ -1,0 +1,6 @@
+RESULT section=D impl=chunked T=128 fwd_bwd_s=0.006 peak_gb=0.26 warmup_s=0.0
+RESULT section=D impl=sequential T=128 fwd_bwd_s=0.034 peak_gb=1.36 warmup_s=0.1
+RESULT section=D impl=chunked T=512 fwd_bwd_s=0.021 peak_gb=0.57 warmup_s=0.0
+RESULT section=D impl=sequential T=512 fwd_bwd_s=0.203 peak_gb=4.28 warmup_s=0.3
+RESULT section=D impl=chunked T=2048 fwd_bwd_s=0.091 peak_gb=2.16 warmup_s=0.2
+RESULT section=D impl=sequential T=2048 fwd_bwd_s=2.294 peak_gb=27.49 warmup_s=2.8

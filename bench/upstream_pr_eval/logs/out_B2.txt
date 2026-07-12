@@ -1,0 +1,20 @@
+
+real27B T=128: g range [5.019e-10, 9.499e-01], frac(g<1e-12)=0.0000, frac(g<1e-6)=0.0062
+  dg: max|diff| overall=7.518e+01  max|diff| where g>=1e-11=7.518e+01  max|diff| where g<1e-11=0.000e+00
+  dg restricted to unsaturated gates: rel=2.82e+01 cos=0.2425134
+  param-level dq : rel=3.84e-06 cos=1.000000000
+  param-level dk : rel=5.59e-06 cos=1.000000119
+  param-level dv : rel=7.00e-06 cos=0.999999940
+  param-level da : rel=8.85e-06 cos=1.000000000
+  param-level db : rel=4.19e-06 cos=1.000000119
+
+smallGQA T=64: g range [4.356e-09, 9.469e-01], frac(g<1e-12)=0.0000, frac(g<1e-6)=0.0234
+  dg: max|diff| overall=3.797e-01  max|diff| where g>=1e-11=3.797e-01  max|diff| where g<1e-11=0.000e+00
+  dg restricted to unsaturated gates: rel=2.86e-01 cos=0.9974670
+  param-level dq : rel=1.85e-06 cos=1.000000000
+  param-level dk : rel=2.69e-06 cos=0.999999940
+  param-level dv : rel=2.37e-06 cos=1.000000000
+  param-level da : rel=1.79e-05 cos=1.000000000
+  param-level db : rel=3.87e-06 cos=1.000000000
+
+DONE B2

@@ -1,0 +1,56 @@
+mlx 0.32.0 | metal: True
+
+=== A: forward exactness (chunked & kernel vs sequential ops) ===
+
+--- dtype=mlx.core.float32 ---
+small    T=17   chunked-vs-seq: y[max_abs=1.04e-07 rel=3.88e-07 cos=1.0000000] state[max_abs=1.19e-07 rel=2.45e-07] | kernel-vs-seq: y[max_abs=4.47e-08 rel=1.66e-07]
+small    T=64   chunked-vs-seq: y[max_abs=1.21e-06 rel=2.85e-06 cos=1.0000000] state[max_abs=2.83e-06 rel=1.18e-05] | kernel-vs-seq: y[max_abs=5.96e-08 rel=1.40e-07]
+small    T=128  chunked-vs-seq: y[max_abs=7.00e-07 rel=1.78e-06 cos=0.9999999] state[max_abs=1.97e-07 rel=8.39e-07] | kernel-vs-seq: y[max_abs=8.94e-08 rel=2.28e-07]
+small    T=200  chunked-vs-seq: y[max_abs=1.44e-06 rel=2.70e-06 cos=1.0000001] state[max_abs=1.34e-06 rel=3.97e-06] | kernel-vs-seq: y[max_abs=1.19e-07 rel=2.24e-07]
+small    T=512  chunked-vs-seq: y[max_abs=1.68e-06 rel=2.45e-06 cos=0.9999999] state[max_abs=1.70e-06 rel=4.96e-06] | kernel-vs-seq: y[max_abs=1.19e-07 rel=1.73e-07]
+real27B  T=128  chunked-vs-seq: y[max_abs=2.77e-06 rel=7.15e-06 cos=1.0000000] state[max_abs=1.16e-06 rel=3.13e-06] | kernel-vs-seq: y[max_abs=5.96e-08 rel=1.54e-07]
+real27B  T=512  chunked-vs-seq: y[max_abs=1.88e-06 rel=4.17e-06 cos=1.0000000] state[max_abs=9.83e-07 rel=2.79e-06] | kernel-vs-seq: y[max_abs=4.47e-08 rel=9.94e-08]
+
+--- dtype=mlx.core.bfloat16 ---
+small    T=17   chunked-vs-seq: y[max_abs=0.00e+00 rel=0.00e+00 cos=1.0000001] state[max_abs=8.94e-08 rel=1.84e-07] | kernel-vs-seq: y[max_abs=0.00e+00 rel=0.00e+00]
+small    T=64   chunked-vs-seq: y[max_abs=2.44e-04 rel=5.73e-04 cos=1.0000000] state[max_abs=2.96e-07 rel=1.24e-06] | kernel-vs-seq: y[max_abs=2.44e-04 rel=5.73e-04]
+small    T=128  chunked-vs-seq: y[max_abs=1.22e-04 rel=3.11e-04 cos=1.0000000] state[max_abs=3.95e-07 rel=1.69e-06] | kernel-vs-seq: y[max_abs=6.10e-05 rel=1.55e-04]
+small    T=200  chunked-vs-seq: y[max_abs=1.22e-04 rel=2.28e-04 cos=0.9999999] state[max_abs=1.49e-07 rel=4.42e-07] | kernel-vs-seq: y[max_abs=1.22e-04 rel=2.28e-04]
+small    T=512  chunked-vs-seq: y[max_abs=6.10e-05 rel=8.88e-05 cos=0.9999999] state[max_abs=2.41e-06 rel=7.07e-06] | kernel-vs-seq: y[max_abs=2.44e-04 rel=3.55e-04]
+real27B  T=128  chunked-vs-seq: y[max_abs=2.44e-04 rel=6.35e-04 cos=1.0000000] state[max_abs=1.22e-06 rel=3.27e-06] | kernel-vs-seq: y[max_abs=2.44e-04 rel=6.35e-04]
+real27B  T=512  chunked-vs-seq: y[max_abs=4.88e-04 rel=1.08e-03 cos=1.0000000] state[max_abs=1.06e-06 rel=3.00e-06] | kernel-vs-seq: y[max_abs=4.88e-04 rel=1.08e-03]
+
+=== B: vjp grads, chunked vs sequential (fp32, cotangent on y, zero on state) ===
+small    T=17   dq[rel=4.83e-07 cos=0.9999999] dk[rel=4.24e-07 cos=1.0000001] dv[rel=1.27e-06 cos=0.9999999] dg[rel=2.89e-04 cos=1.0000000] dbeta[rel=1.79e-06 cos=1.0000000]
+small    T=64   dq[rel=3.61e-06 cos=1.0000000] dk[rel=3.77e-06 cos=1.0000000] dv[rel=1.20e-06 cos=1.0000001] dg[rel=1.98e-01 cos=0.9874623] dbeta[rel=1.88e-06 cos=1.0000000]
+small    T=128  dq[rel=1.84e-06 cos=1.0000001] dk[rel=1.36e-06 cos=1.0000000] dv[rel=2.26e-06 cos=1.0000001] dg[rel=1.23e-03 cos=0.9999998] dbeta[rel=2.60e-06 cos=1.0000000]
+small    T=200  dq[rel=1.02e-06 cos=1.0000000] dk[rel=1.53e-06 cos=1.0000000] dv[rel=1.06e-06 cos=1.0000000] dg[rel=4.80e-05 cos=1.0000000] dbeta[rel=1.19e-06 cos=0.9999999]
+real27B  T=128  dq[rel=2.24e-06 cos=1.0000000] dk[rel=2.52e-06 cos=1.0000001] dv[rel=3.46e-06 cos=1.0000000] dg[rel=2.82e+01 cos=0.2425134] dbeta[rel=3.12e-06 cos=0.9999999]
+
+=== C: three-way VJP at T<=128, scalar gating, GQA (ours vs chunked vs sequential) ===
+smallGQA T=64
+   dq    ours-vs-seq[rel=1.42e-07 cos=1.0000000]  chunked-vs-seq[rel=1.92e-06 cos=1.0000000]  ours-vs-chunked[rel=1.89e-06 cos=1.0000000]
+   dk    ours-vs-seq[rel=1.36e-07 cos=0.9999999]  chunked-vs-seq[rel=2.72e-06 cos=1.0000000]  ours-vs-chunked[rel=2.72e-06 cos=1.0000000]
+   dv    ours-vs-seq[rel=2.04e-07 cos=1.0000000]  chunked-vs-seq[rel=2.40e-06 cos=1.0000001]  ours-vs-chunked[rel=2.41e-06 cos=0.9999999]
+   dg    ours-vs-seq[rel=1.80e-07 cos=1.0000000]  chunked-vs-seq[rel=2.86e-01 cos=0.9974669]  ours-vs-chunked[rel=2.83e-01 cos=0.9974669]
+   dbeta ours-vs-seq[rel=2.91e-07 cos=1.0000000]  chunked-vs-seq[rel=3.92e-06 cos=1.0000000]  ours-vs-chunked[rel=3.94e-06 cos=1.0000000]
+smallGQA T=128
+   dq    ours-vs-seq[rel=1.17e-07 cos=1.0000001]  chunked-vs-seq[rel=2.69e-06 cos=1.0000001]  ours-vs-chunked[rel=2.69e-06 cos=1.0000001]
+   dk    ours-vs-seq[rel=1.54e-07 cos=0.9999999]  chunked-vs-seq[rel=2.37e-06 cos=1.0000000]  ours-vs-chunked[rel=2.37e-06 cos=0.9999999]
+   dv    ours-vs-seq[rel=1.96e-07 cos=1.0000000]  chunked-vs-seq[rel=4.63e-06 cos=1.0000000]  ours-vs-chunked[rel=4.71e-06 cos=1.0000000]
+   dg    ours-vs-seq[rel=1.43e-07 cos=1.0000000]  chunked-vs-seq[rel=1.27e-04 cos=1.0000001]  ours-vs-chunked[rel=1.27e-04 cos=1.0000001]
+   dbeta ours-vs-seq[rel=1.13e-07 cos=1.0000000]  chunked-vs-seq[rel=2.98e-06 cos=0.9999999]  ours-vs-chunked[rel=3.01e-06 cos=0.9999999]
+real27B  T=64
+   dq    ours-vs-seq[rel=1.93e-07 cos=1.0000000]  chunked-vs-seq[rel=7.52e-06 cos=1.0000000]  ours-vs-chunked[rel=7.54e-06 cos=1.0000000]
+   dk    ours-vs-seq[rel=1.96e-07 cos=0.9999999]  chunked-vs-seq[rel=6.48e-06 cos=1.0000000]  ours-vs-chunked[rel=6.48e-06 cos=1.0000001]
+   dv    ours-vs-seq[rel=1.71e-07 cos=1.0000000]  chunked-vs-seq[rel=7.83e-06 cos=1.0000000]  ours-vs-chunked[rel=7.83e-06 cos=1.0000000]
+   dg    ours-vs-seq[rel=2.39e-07 cos=1.0000000]  chunked-vs-seq[rel=6.63e+00 cos=0.7904383]  ours-vs-chunked[rel=9.90e-01 cos=0.7904383]
+   dbeta ours-vs-seq[rel=1.86e-07 cos=1.0000001]  chunked-vs-seq[rel=7.85e-06 cos=1.0000000]  ours-vs-chunked[rel=7.88e-06 cos=1.0000000]
+real27B  T=128
+   dq    ours-vs-seq[rel=2.25e-07 cos=1.0000001]  chunked-vs-seq[rel=2.27e-06 cos=1.0000001]  ours-vs-chunked[rel=2.33e-06 cos=1.0000001]
+   dk    ours-vs-seq[rel=2.70e-07 cos=0.9999999]  chunked-vs-seq[rel=2.11e-06 cos=0.9999999]  ours-vs-chunked[rel=2.13e-06 cos=0.9999999]
+   dv    ours-vs-seq[rel=1.34e-07 cos=1.0000000]  chunked-vs-seq[rel=4.75e-06 cos=1.0000000]  ours-vs-chunked[rel=4.75e-06 cos=1.0000000]
+   dg    ours-vs-seq[rel=1.38e-07 cos=1.0000000]  chunked-vs-seq[rel=2.11e+01 cos=0.2463747]  ours-vs-chunked[rel=1.00e+00 cos=0.2463747]
+   dbeta ours-vs-seq[rel=1.67e-07 cos=0.9999999]  chunked-vs-seq[rel=4.65e-06 cos=1.0000000]  ours-vs-chunked[rel=4.64e-06 cos=0.9999999]
+
+DONE ABC

@@ -1,0 +1,38 @@
+Loading pretrained model
+Loading datasets
+Training
+Trainable parameters: 0.054% (14.591M/26895.994M)
+Starting training..., iters: 10
+Calculating loss...:   0%|          | 0/1 [00:00<?, ?it/s]Calculating loss...: 100%|██████████| 1/1 [00:03<00:00,  3.55s/it]Calculating loss...: 100%|██████████| 1/1 [00:03<00:00,  3.55s/it]
+Iter 1: Val loss 1.444, Val took 3.564s
+Iter 1: Train loss 1.442, Learning Rate 1.000e-05, It/sec 0.186, Tokens/sec 122.720, Trained Tokens 660, Peak mem 35.523 GB
+Iter 2: Train loss 1.285, Learning Rate 1.000e-05, It/sec 0.181, Tokens/sec 122.168, Trained Tokens 1334, Peak mem 35.794 GB
+Iter 3: Train loss 1.126, Learning Rate 1.000e-05, It/sec 0.209, Tokens/sec 141.467, Trained Tokens 2010, Peak mem 35.851 GB
+Iter 4: Train loss 1.093, Learning Rate 1.000e-05, It/sec 0.191, Tokens/sec 127.381, Trained Tokens 2678, Peak mem 35.851 GB
+Iter 5: Train loss 1.009, Learning Rate 1.000e-05, It/sec 0.212, Tokens/sec 143.228, Trained Tokens 3353, Peak mem 35.851 GB
+Iter 6: Train loss 0.962, Learning Rate 1.000e-05, It/sec 0.213, Tokens/sec 144.748, Trained Tokens 4033, Peak mem 35.852 GB
+Iter 7: Train loss 0.953, Learning Rate 1.000e-05, It/sec 0.218, Tokens/sec 144.863, Trained Tokens 4699, Peak mem 35.852 GB
+Iter 8: Train loss 0.908, Learning Rate 1.000e-05, It/sec 0.207, Tokens/sec 141.377, Trained Tokens 5382, Peak mem 35.852 GB
+Iter 9: Train loss 0.884, Learning Rate 1.000e-05, It/sec 0.213, Tokens/sec 143.647, Trained Tokens 6057, Peak mem 35.852 GB
+Calculating loss...:   0%|          | 0/1 [00:00<?, ?it/s]Calculating loss...: 100%|██████████| 1/1 [00:03<00:00,  3.27s/it]Calculating loss...: 100%|██████████| 1/1 [00:03<00:00,  3.27s/it]
+Iter 10: Val loss 0.859, Val took 3.277s
+Iter 10: Train loss 0.839, Learning Rate 1.000e-05, It/sec 0.212, Tokens/sec 145.052, Trained Tokens 6740, Peak mem 35.852 GB
+Saved final weights to adapters_1389_long/adapters.safetensors.
+       59.07 real         9.82 user        13.42 sys
+         29613178880  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             1840185  page reclaims
+                  20  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  10  voluntary context switches
+              109404  involuntary context switches
+        128455348910  instructions retired
+         65619479748  cycles elapsed
+         37902669856  peak memory footprint

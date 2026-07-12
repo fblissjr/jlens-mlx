@@ -1,0 +1,6 @@
+RESULT section=G impl=metal T=128 fwd_bwd_s=0.003 peak_gb=0.63 warmup_s=0.0
+RESULT section=G impl=python T=128 fwd_bwd_s=0.044 peak_gb=1.82 warmup_s=0.1
+RESULT section=G impl=metal T=512 fwd_bwd_s=0.012 peak_gb=2.06 warmup_s=0.1
+RESULT section=G impl=python T=512 fwd_bwd_s=0.181 peak_gb=4.63 warmup_s=0.3
+RESULT section=G impl=metal T=2048 fwd_bwd_s=0.073 peak_gb=4.67 warmup_s=0.2
+RESULT section=G impl=python T=2048 fwd_bwd_s=0.783 peak_gb=14.01 warmup_s=1.1
