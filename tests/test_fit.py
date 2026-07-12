@@ -141,5 +141,9 @@ def test_fit_corpus_progress_callback(monkeypatch):
     item_events = [e for e in events if "skipped" in e]
     assert len(item_events) == 3                              # one per item
     assert item_events[1]["skipped"] is True                 # the empty-positions item
-    assert item_events[0]["skipped"] is False and item_events[0]["eta_secs"] is not None
+    # Positions-weighted ETA (see fit._positions_eta): the FIRST item actually timed this run has
+    # no rate yet ("eta pending"); the SECOND timed item (index 2 here -- item 1 was skipped) gets
+    # a real rate-based eta.
+    assert item_events[0]["skipped"] is False and item_events[0]["eta_secs"] is None
+    assert item_events[2]["skipped"] is False and item_events[2]["eta_secs"] is not None
     assert item_events[0]["done"] == 1 and item_events[2]["done"] == 2

@@ -26,7 +26,7 @@ import mlx.core as mx
 CHUNK_SIZE_DEFAULT = 128
 
 
-def jacobian_via_vjp(fn, h, valid, *, chunk_size: int = CHUNK_SIZE_DEFAULT):
+def jacobian_via_vjp(fn, h, valid, *, chunk_size: int = CHUNK_SIZE_DEFAULT, progress=None):
     """End-to-end Jacobian of `fn` at `h`, Anthropic's estimator (dim-batched).
 
         J[i, j] = mean_{p in valid} sum_{p' in valid} d(fn(h)[p', i]) / d(h[p, j])
@@ -40,15 +40,20 @@ def jacobian_via_vjp(fn, h, valid, *, chunk_size: int = CHUNK_SIZE_DEFAULT):
         valid: 1-D mx.array of position indices -- summed over as targets, averaged over
             as sources (the valid_position mask: skip attention sinks + the last position).
         chunk_size: output-dim rows batched through one mx.vjp (see CHUNK_SIZE_DEFAULT).
+        progress: optional `fn(done_chunks, total_chunks)` called after each chunk completes
+            (1-indexed `done_chunks`, final call has `done_chunks == total_chunks`). Purely an
+            observability hook -- default None reproduces the exact prior behavior/timing.
 
     Returns:
         [D, D] float32. Row i = output dim i; transport is `residual @ J.T` (i.e. J @ h).
     """
     S, D = h.shape[1], h.shape[-1]
     C = max(1, int(chunk_size))
+    total_chunks = -(-D // C)  # ceil(D / C)
     pos_mask = mx.zeros((S,), dtype=h.dtype).at[valid].add(1.0)  # 1 at valid positions
     eye = mx.eye(D, dtype=h.dtype)                               # rows = output-dim one-hots
     rows = []
+    done_chunks = 0
     for lo in range(0, D, C):
         dims = list(range(lo, min(lo + C, D)))
         c = len(dims)
@@ -62,4 +67,7 @@ def jacobian_via_vjp(fn, h, valid, *, chunk_size: int = CHUNK_SIZE_DEFAULT):
         chunk_rows = grad[:, valid, :].astype(mx.float32).mean(axis=1)  # [c, D]
         rows.append(chunk_rows)
         mx.eval(rows[-1])                                       # bound graph/memory growth
+        done_chunks += 1
+        if progress is not None:
+            progress(done_chunks, total_chunks)
     return mx.concatenate(rows, axis=0)                         # [D, D], row d = output dim

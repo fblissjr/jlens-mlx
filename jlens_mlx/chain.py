@@ -106,10 +106,14 @@ def _mask_fn(ad: ModelAdapter, h: mx.array):
 
 def fit_prompt_chain(model, input_ids, source_layers, *, adapter: ModelAdapter | None = None,
                      target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT,
-                     positions=None, chunk_size: int = CHUNK_SIZE_DEFAULT):
+                     positions=None, chunk_size: int = CHUNK_SIZE_DEFAULT, progress=None):
     """Fit `J_l` for ALL `source_layers` in one backward sweep (see the module header's VERIFIED
     banner: == direct on qwen3_5+gpt2, cos 1.0). Same signature/semantics as `fit.fit_prompt` --
-    MUST return the same J's (that is the gate). Returns ({l: [D,D] float32}, seq_len)."""
+    MUST return the same J's (that is the gate). Returns ({l: [D,D] float32}, seq_len).
+
+    `progress`: optional `fn(done_chunks, total_chunks)` called after each output-dim chunk's
+    full backward sweep (all layers) completes -- observability only, no effect on the J's
+    (default None reproduces the exact prior behavior)."""
     ad = adapter or ModelAdapter(model)
     target = _resolve_target(ad, target_layer)
     layers = sorted({int(l) for l in source_layers})
@@ -151,6 +155,8 @@ def fit_prompt_chain(model, input_ids, source_layers, *, adapter: ModelAdapter |
     # Accumulate J rows per layer as we sweep, chunk by chunk over output dims.
     rows: dict[int, list[mx.array]] = {l: [] for l in layers}
     C = max(1, int(chunk_size))
+    total_chunks = -(-D // C)  # ceil(D / C)
+    done_chunks = 0
     with patch_cm:
         for lo in range(0, D, C):
             dims = list(range(lo, min(lo + C, D)))
@@ -169,6 +175,9 @@ def fit_prompt_chain(model, input_ids, source_layers, *, adapter: ModelAdapter |
                     _, g = mx.vjp(lambda h: block(h, mask, cache=None), [h_in], [cot])
                     cot = g[0]                                      # [c, S, D] at acts[l-1]
                     mx.eval(cot)                                    # ⚠ #5: bound the graph
+            done_chunks += 1
+            if progress is not None:
+                progress(done_chunks, total_chunks)
 
     out = {l: mx.concatenate(rows[l], axis=0) for l in layers}     # each [D, D], row = output dim
     return out, S

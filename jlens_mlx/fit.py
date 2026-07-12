@@ -15,6 +15,12 @@ fa/ssm masks + the differentiable GDN recurrence with the ported Metal backward)
 """
 from __future__ import annotations
 
+import datetime
+import json
+import os
+import time
+from pathlib import Path
+
 import mlx.core as mx
 
 from .capture import ModelAdapter, capture_residuals
@@ -76,11 +82,15 @@ def make_tail(adapter: ModelAdapter, start: int, end: int):
 
 def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None = None,
                target_layer: int | None = None, skip_first: int = SKIP_FIRST_DEFAULT,
-               chunk_size: int = CHUNK_SIZE_DEFAULT, positions=None):
+               chunk_size: int = CHUNK_SIZE_DEFAULT, positions=None, progress=None):
     """Per-prompt `J_l = d(acts[target])/d(acts[l])` via mx.vjp of blocks[l+1..target].
     `chunk_size` is the output-dim batch per VJP (see providers.generic_vjp). `positions`
     overrides the default valid_positions mask (e.g. a corpus role-aware mask); positions
     are clamped to the sequence and the last index is dropped (no next-token target).
+    `progress`: optional `fn(done_chunks, total_chunks)` threaded into `jacobian_via_vjp` for
+    EACH source layer in turn (so it resets per layer on this direct/per-layer path -- the
+    chain fitter's `progress` is a single sweep-wide count; this is the un-gated-arch fallback,
+    observability only, default None reproduces the exact prior behavior).
     Returns ({l: [D,D]}, seq_len)."""
     ad = adapter or ModelAdapter(model)
     n = ad.n_layers
@@ -115,7 +125,8 @@ def fit_prompt(model, input_ids, source_layers, *, adapter: ModelAdapter | None 
     # the fallback for un-gated arches (e.g. gemma array-mask). Keep it correct + simple.
     for l in layers:
         tail = make_tail(ad, l + 1, target + 1)  # blocks l+1..target; l == target -> identity
-        out[l] = jacobian_via_vjp(tail, acts[l][None], valid, chunk_size=chunk_size)
+        out[l] = jacobian_via_vjp(tail, acts[l][None], valid, chunk_size=chunk_size,
+                                  progress=progress)
     return out, len(ids)
 
 
@@ -150,6 +161,87 @@ def fit_lens(model, prompts, *, source_layers, tokenize, adapter: ModelAdapter |
     if not n:
         raise ValueError("fit_lens: no prompts provided")
     return {l: acc[l] / n for l in layers}, n
+
+
+def _hms(t: float | None = None) -> str:
+    """Wall-clock `HH:MM:SS` prefix for progress lines (this is a script, not a workflow --
+    time.strftime is enough; no timezone handling needed for a same-host operator log)."""
+    ts = time.time() if t is None else t
+    return datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+
+
+def _positions_eta(total_fit_seconds: float, positions_completed: int, items_timed: int,
+                    remaining_positions: int) -> tuple[float | None, float | None]:
+    """Positions-weighted ETA: `sec_per_pos = total_fit_seconds / positions_completed` (both
+    accumulated ONLY over items actually timed in this process -- resume-skipped items never
+    reach this accounting, see `fit_corpus`), extrapolated over the remaining items' positions.
+
+    `items_timed` gates the very first timed item to a "no rate yet" `(None, None)` -- a single
+    item's rate is not trusted (e.g. first-call compile/warmup skew); ETA starts reporting from
+    the second timed item, using the cumulative rate over everything timed so far (incl. that
+    item). Returns `(sec_per_pos, eta_secs)`."""
+    if items_timed <= 0 or positions_completed <= 0:
+        return None, None
+    sec_per_pos = total_fit_seconds / positions_completed
+    return sec_per_pos, sec_per_pos * remaining_positions
+
+
+def _write_progress_json(checkpoint_dir, info: dict) -> None:
+    """Atomically (tmp+rename) write `<checkpoint_dir>/progress.json` -- cheap for an external
+    watcher to poll (mirrors the `_ckpt_save` atomicity pattern below)."""
+    d = Path(checkpoint_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "progress.json"
+    tmp = d / f".progress.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(info, f)
+    os.replace(tmp, p)
+
+
+def _chunk_heartbeat(*, i: int, n_total: int, total_fit_seconds: float, positions_completed: int,
+                     items_timed: int, positions_remaining: int, positions_total: int,
+                     checkpoint_dir=None, on_tick=None, min_interval: float = 30.0,
+                     _now=time.perf_counter, _print=print):
+    """Build a `progress(done_chunks, total_chunks)` callback for ONE item's chunk loop (threaded
+    into `fit_prompt_chain`/`fit_prompt` as their `progress` kwarg). On each chunk:
+
+      - prints `[HH:MM:SS]   item k/N chunk c/C (pp%) item_elapsed=Xs`, rate-limited to at most
+        one line per `min_interval` seconds (the FIRST chunk always prints -- immediate liveness
+        signal -- and the FINAL chunk always prints regardless of the interval);
+      - at that same (throttled) cadence, atomically writes `<checkpoint_dir>/progress.json`
+        (skipped if `checkpoint_dir` is falsy) and calls `on_tick(info)` (e.g. the driver's
+        watchdog re-arm) with the same info dict.
+
+    `total_fit_seconds`/`positions_completed`/`items_timed`/`positions_remaining` are a snapshot
+    taken at the START of this item (the item hasn't finished, so they reflect prior items only --
+    see `_positions_eta`). `_now`/`_print` are injectable so the rate limit is unit-testable
+    without real sleeps."""
+    t_item_start = _now()
+    state = {"last": None}
+
+    def _cb(done: int, total: int) -> None:
+        now = _now()
+        is_final = done >= total
+        if not is_final and state["last"] is not None and (now - state["last"]) < min_interval:
+            return
+        state["last"] = now
+        item_elapsed = now - t_item_start
+        pct = (100.0 * done / total) if total else 100.0
+        sec_per_pos, eta_secs = _positions_eta(total_fit_seconds, positions_completed, items_timed,
+                                               positions_remaining)
+        peak_gb = mx.get_peak_memory() / 1e9
+        _print(f"[{_hms()}]   item {i + 1}/{n_total} chunk {done}/{total} ({pct:.0f}%) "
+              f"item_elapsed={item_elapsed:.0f}s", flush=True)
+        info = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), "item": i + 1,
+                "n_items": n_total, "chunk": done, "n_chunks": total,
+                "positions_done": positions_completed, "positions_total": positions_total,
+                "sec_per_pos": sec_per_pos, "eta_s": eta_secs, "peak_gb": peak_gb}
+        if checkpoint_dir:
+            _write_progress_json(checkpoint_dir, info)
+        if on_tick is not None:
+            on_tick(info)
+
+    return _cb
 
 
 def _ckpt_paths(checkpoint_dir):
@@ -191,7 +283,8 @@ def _ckpt_load(checkpoint_dir):
 
 def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = None,
                target_layer: int | None = None, chunk_size: int = CHUNK_SIZE_DEFAULT,
-               progress=None, use_chain: bool = True, checkpoint_dir=None, resume: bool = True):
+               progress=None, use_chain: bool = True, checkpoint_dir=None, resume: bool = True,
+               heartbeat=None, heartbeat_interval: float = 30.0):
     """Average `J_l` over a materialized `Corpus` (jlens_mlx.corpus), using each item's own
     role-aware position mask (assistant/think span for on-policy prompts, content span for
     human-text). Returns ({l: [D,D]}, n_items). The corpus provenance should be stamped onto
@@ -205,17 +298,29 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
     + progress. A killed fit resumes from there (skips completed items) when re-run with the SAME
     corpus + `source_layers` + `target_layer` (the caller must pass the same materialized corpus --
     serialize it alongside; see corpus.Corpus.to_json). Resume is refused (fresh start) if those
-    don't match. This is the robust alternative to detaching the process.
+    don't match. This is the robust alternative to detaching the process. Also gates
+    `<checkpoint_dir>/progress.json` (below) -- no checkpoint_dir means no sidecar.
 
-    `progress(info)` is called after each item (long deep-band fits are otherwise silent) with
-    a dict: {i, n_total, done, skipped, seq_len, n_pos, on_policy, secs, elapsed, eta_secs}.
-    `secs` is that item's fit time; `eta_secs` extrapolates from the mean so far."""
-    import time
+    `progress(info)` is called after each item (long deep-band fits are otherwise silent) with a
+    dict: {i, n_total, done, skipped, seq_len, n_pos, on_policy, secs, elapsed, eta_secs,
+    sec_per_pos, item_sec_per_pos, peak_gb}. `secs` is that item's fit time; `eta_secs` is the
+    POSITIONS-weighted ETA (see `_positions_eta`) -- None on the first item timed in this process
+    ("no rate yet"), a real extrapolation from then on. `peak_gb` is that item's peak memory
+    (`mx.reset_peak_memory()` at item start, `mx.get_peak_memory()` at item end).
+
+    `heartbeat(info)` (new): an intra-item liveness hook for long items -- a deep-band item can
+    otherwise be silent for tens of minutes. Threaded into the per-item fit call as its own
+    `progress(done_chunks, total_chunks)` chunk callback (see `_chunk_heartbeat`); prints
+    `[HH:MM:SS]   item k/N chunk c/C (pp%) item_elapsed=Xs`, rate-limited to at most one line per
+    `heartbeat_interval` seconds (always on the final chunk), writes `progress.json`, and invokes
+    `heartbeat(info)` at that same cadence AND once more on item completion -- e.g. so a caller can
+    re-arm a `faulthandler.dump_traceback_later` hang watchdog on each tick."""
     ad = adapter or ModelAdapter(model)
     layers = sorted(int(l) for l in source_layers)
     target = (ad.n_layers - 1) if target_layer is None else int(target_layer)
     _fit = _fit_one(use_chain)
     n_total = len(corpus.items)
+    positions_total = sum(len(it.positions) for it in corpus.items)
 
     acc: dict[int, mx.array] | None = None
     n = 0            # items that contributed to J_sum (the divisor)
@@ -234,13 +339,25 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
                           "n_total": n_total})
 
     t_start = time.perf_counter()
+    # Positions-weighted rate, accumulated ONLY over items actually timed in THIS process --
+    # resume-skipped items (i < start_idx) never reach this accounting (see _positions_eta).
+    total_fit_seconds = 0.0
+    positions_completed = 0
+    items_timed = 0
     for i, item in enumerate(corpus.items):
         if i < start_idx:
             continue  # already done in a prior (killed) run
         t0 = time.perf_counter()
+        mx.reset_peak_memory()
+        positions_remaining = sum(len(it.positions) for it in corpus.items[i + 1:])
+        chunk_cb = _chunk_heartbeat(
+            i=i, n_total=n_total, total_fit_seconds=total_fit_seconds,
+            positions_completed=positions_completed, items_timed=items_timed,
+            positions_remaining=positions_remaining, positions_total=positions_total,
+            checkpoint_dir=checkpoint_dir, on_tick=heartbeat, min_interval=heartbeat_interval)
         try:
             per, _ = _fit(model, item.ids, layers, adapter=ad, target_layer=target_layer,
-                          chunk_size=chunk_size, positions=item.positions)
+                          chunk_size=chunk_size, positions=item.positions, progress=chunk_cb)
         except ValueError:
             if checkpoint_dir and acc is not None:
                 _ckpt_save(checkpoint_dir, acc, {"next_idx": i + 1, "n_done": n, "layers": layers,
@@ -250,22 +367,49 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
                 progress({"i": i, "n_total": n_total, "done": n, "skipped": True,
                           "seq_len": len(item.ids), "n_pos": len(item.positions),
                           "on_policy": item.on_policy, "secs": 0.0,
-                          "elapsed": time.perf_counter() - t_start, "eta_secs": None})
+                          "elapsed": time.perf_counter() - t_start, "eta_secs": None,
+                          "sec_per_pos": None, "item_sec_per_pos": None, "peak_gb": None})
             continue  # no usable positions for this item
         acc = dict(per) if acc is None else {l: acc[l] + per[l] for l in layers}
         mx.eval(list(acc.values()))
         n += 1
+        secs = time.perf_counter() - t0
+        peak_gb = mx.get_peak_memory() / 1e9
+        item_sec_per_pos = (secs / len(item.positions)) if item.positions else None
+
+        # Update the running rate AFTER this item, then compute its own ETA -- except the very
+        # first item timed this run, which reports "no rate yet" (see _positions_eta / docstring).
+        first_timed = items_timed == 0
+        total_fit_seconds += secs
+        positions_completed += len(item.positions)
+        items_timed += 1
+        if first_timed:
+            sec_per_pos, eta = None, None
+        else:
+            sec_per_pos, eta = _positions_eta(total_fit_seconds, positions_completed, items_timed,
+                                              positions_remaining)
+
         if checkpoint_dir:
             _ckpt_save(checkpoint_dir, acc, {"next_idx": i + 1, "n_done": n, "layers": layers,
                                              "target": target, "chunk_size": chunk_size,
                                              "use_chain": use_chain, "n_total": n_total})
+            _write_progress_json(checkpoint_dir, {
+                "ts": datetime.datetime.now().isoformat(timespec="seconds"), "item": i + 1,
+                "n_items": n_total, "chunk": None, "n_chunks": None,
+                "positions_done": positions_completed, "positions_total": positions_total,
+                "sec_per_pos": sec_per_pos, "eta_s": eta, "peak_gb": peak_gb})
+        if heartbeat is not None:
+            heartbeat({"ts": datetime.datetime.now().isoformat(timespec="seconds"), "item": i + 1,
+                      "n_items": n_total, "chunk": None, "n_chunks": None,
+                      "positions_done": positions_completed, "positions_total": positions_total,
+                      "sec_per_pos": sec_per_pos, "eta_s": eta, "peak_gb": peak_gb})
         if progress:
             elapsed = time.perf_counter() - t_start
-            eta = (elapsed / (i - start_idx + 1)) * (n_total - i - 1)
             progress({"i": i, "n_total": n_total, "done": n, "skipped": False,
                       "seq_len": len(item.ids), "n_pos": len(item.positions),
-                      "on_policy": item.on_policy, "secs": time.perf_counter() - t0,
-                      "elapsed": elapsed, "eta_secs": eta})
+                      "on_policy": item.on_policy, "secs": secs,
+                      "elapsed": elapsed, "eta_secs": eta, "sec_per_pos": sec_per_pos,
+                      "item_sec_per_pos": item_sec_per_pos, "peak_gb": peak_gb})
     if not n:
         raise ValueError("fit_corpus: no items produced a usable fit")
     return {l: acc[l] / n for l in layers}, n

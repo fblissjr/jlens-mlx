@@ -59,7 +59,10 @@ whole-fit J cos 1.000000 vs the pure-autodiff path, ~8x faster on even a tiny mo
 - **Held-out fidelity gate + lens diff** (`verify.py`) — per-layer top-1/top-k/KL vs true logits with a
   KL-based identity tripwire (quantization-tolerant); two-lens diff for the abliterated-vs-stock finding.
 - **First band-targeted own-fit** on the served abliterated Qwen3.5-27B (`scripts/fit_band_corpus.py`) —
-  corpus → `fit_corpus` over the product band (layers 16–47) → gate → provenanced save.
+  corpus → `fit_corpus` over the product band (layers 16–47) → gate → provenanced save. Timestamped
+  progress + a positions-weighted ETA + a `progress.json` sidecar + a hang watchdog make a multi-hour
+  run observable; for an overnight run wrap it in `scripts/fit_band_supervisor.sh`, which restarts on
+  an unexpected exit (native crash) but stops on success/config-error/degenerate-corpus.
 
 We do **not** vendor jlens-qwen36. We port specific pieces (verified vs `mx.vjp`, attributed
 per-file); its only role is an *optional* GDN speed kernel for the 27B qwen. Reference clones
