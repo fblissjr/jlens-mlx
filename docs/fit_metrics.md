@@ -60,17 +60,28 @@ Grouped, each with the data that answers it, whether we already collect it, and 
 "Being collected" = the running fit emits it; the store just structures it.
 
 ### Memory mechanics (where predictions failed — see §4)
-- **M1 — how does peak scale with sequence length?** Data: `(seq_len, peak_gb)` per item —
-  **being collected** (`v_peak_vs_seq`). Difficulty: **trivial** once items span a range of
-  lengths. This is the load-bearing question: it decides whether a given corpus's longest item
-  OOMs.
-- **M2 — what is the true internal breakdown of the peak?** Data: `mx.get_active_memory` /
-  `get_cache_memory` sampled around sweep phases. Not collected. Difficulty: medium (coarse
-  split cheap; per-tensor hard). Our reconstructions have been unreliable — this needs real
-  instrumentation.
+- **M1 — how does peak scale with sequence length? ANSWERED (measured 2026-07-12).** Peak
+  scales ~linearly with sequence length on the 27B band at chunk 64: seq 21 -> 65.3GB, seq 77 ->
+  161.1GB (slope ~1.7GB/token, intercept ~29GB ~= model weights). This is load-bearing in
+  practice: it correctly predicts item 10 (seq 126, ~245GB extrapolated) exceeds the 192GB
+  ceiling — see the item-10 drop in §4. `v_peak_vs_seq` is the query going forward as more items
+  land.
+- **M2 — what is the true internal breakdown of the peak? Still open, and now the priority
+  follow-up.** Data: `mx.get_active_memory` / `get_cache_memory` sampled around chain-sweep
+  phases. Not collected. Difficulty: medium (coarse split cheap; per-tensor hard). This is
+  genuinely unexplained, not just under-measured: first-principles estimates of what the chain
+  sweep should retain range **34GB-320GB** depending on assumptions, and none match the
+  measured ~161GB for a 77-token item; chunk-independence (§4, misprediction 3) rules out the
+  obvious dim-batch-cotangent hypothesis. Cheap to run; it is the prerequisite for any real
+  reduction and the honest end of the guessing this section documents. NOT urgent (the current
+  fit is unblocked by the §4 workarounds) but a standing liability — it blocks longer-context
+  transfer experiments, the stock-model diff, and item-batching, all of which want headroom.
 - **M3 — does checkpointing help at real scale, and where does the freed memory live?** Data:
-  the `feat/checkpoint` branch run on the real 27B + phase-level memory reads. Not collected.
-  Difficulty: easy-ish but GPU-gated.
+  the `feat/checkpoint` branch (built, equality-gated, unproven at real scale) run on the real
+  27B + phase-level memory reads. Not collected. Difficulty: easy-ish but GPU-gated. This is the
+  one lever that could reduce a SINGLE item's peak — the actual fix for the item-10 class of
+  problem (fit long items instead of dropping them via `JLENS_MAX_FIT_SEQ`, §4). Do M2 before
+  M3 — instrumentation should inform where checkpointing would actually help.
 
 ### Throughput
 - **T1 — optimal `chunk × item_batch × checkpoint`?** Data: the bench matrix. Partly collected
@@ -138,6 +149,29 @@ process still holds ~161GB and remains vulnerable to external memory pressure.
 
 This is the fifth data point in the same discipline as the four mispredictions above:
 the store — and here, an RSS monitor — measures; we do not predict.
+
+### Item 10 dropped — a single item too big to fit at all (measured 2026-07-12)
+
+`clear_cache()` fixes the transition-pressure SIGKILL, but it does not change the peak
+DURING a large item's compute — and M1 (above) showed the peak scales with sequence
+length at slope ~1.7GB/token, intercept ~29GB. Extrapolated to item 10 (seq 126), the
+predicted peak is **~245GB**, over the 192GB ceiling. This is a different failure class
+from the transition kill: no amount of freeing the pool between items helps, because the
+process needs ~245GB live during that one item's own compute.
+
+The fix (also a workaround, not a root cause fix): a new `JLENS_MAX_FIT_SEQ` env var
+(jlens commit `073cc04`) that skips any corpus item whose sequence length exceeds the
+cap, advancing the checkpoint past it — the lens then averages over the remaining
+items. `band-n14-fixed` is running with `JLENS_MAX_FIT_SEQ=100`, which drops only item
+10, producing an 11-item lens.
+
+**Both of tonight's fixes are workarounds, not root fixes.** `mx.clear_cache()` avoids
+the transition SIGKILL; `JLENS_MAX_FIT_SEQ` avoids the single-item OOM by dropping the
+item. Neither explains or reduces the underlying ~1.7GB/token, ~161GB-for-77-tokens
+footprint — that is M2 and M3 above, and they are the deeper fix: M2 (instrument the
+memory, find where it goes) is the prerequisite; M3 (bench `feat/checkpoint` at real
+scale) is the lever that could let long items fit instead of being dropped. Neither is
+done — both are parked as the next session's priority, in that order.
 
 ## 5. Build order (free wins first)
 

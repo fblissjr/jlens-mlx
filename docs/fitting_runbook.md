@@ -63,7 +63,11 @@ disown
 | `JLENS_LAYERS` | shallow sample | comma list of source layers. Band = `16..47`. |
 | `JLENS_N` | 6 | corpus prompt count (before length-drops). |
 | `JLENS_MAX_SEQ_LEN` | 512 | truncation; **128** keeps every item on the fast GDN kernel (`MAX_T=128`). |
-| `JLENS_CHUNK` | 128 | cotangent dim-batch size (saturates ~64; 128 is safe). |
+| `JLENS_CHUNK` | 128 | cotangent dim-batch size (saturates ~64; 128 is safe). NOT a memory
+lever (measured 2.8% peak reduction 128->64 on twin items) — speed only. |
+| `JLENS_MAX_FIT_SEQ` | unset (no cap) | skip any corpus item whose sequence length exceeds
+this, advancing the checkpoint past it (the lens averages over the rest). A memory guard for
+items intrinsically too big to fit at all — see §5. |
 | `JLENS_ONPOLICY_TOKENS` | 48 | tokens generated per on-policy completion. |
 | `JLENS_OUT` | `out/band-<N>L` | run dir (checkpoint + log live here). |
 | `JLENS_ALLOW_DEGENERATE` | unset | set `=1` to override the diversity gate (only after reading the decode). |
@@ -232,6 +236,18 @@ pool in under a second, negligible against a ~40-min item.
 apps alongside a long fit (extra browser tabs, other model loads) while a large item
 is in flight. The supervisor already auto-restarts a 137, but a persistent
 external-pressure situation could loop.
+
+**A single item is intrinsically too big to fit (still OOMs even with `clear_cache`).**
+Distinct from the transition-pressure SIGKILL above: this is not about freeing the pool
+BETWEEN items, it's that one item's own compute needs more than the machine has. Peak
+scales ~linearly with sequence length (~1.7GB/token, ~29GB intercept — measured on the
+27B band, see `fit_metrics.md` §4), so a long enough item extrapolates past the 192GB
+ceiling regardless of `clear_cache`. Workaround: set `JLENS_MAX_FIT_SEQ` (§1) to skip
+items over the cap — the checkpoint advances past them and the lens averages over what's
+left. This is a workaround, not a fix: it drops data rather than making the item fit.
+The deeper fix (understanding and possibly reducing the per-item peak so long items don't
+need to be dropped) is tracked as M2/M3 in `fit_metrics.md` §3 — not done, parked for a
+future session.
 
 ---
 
