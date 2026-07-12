@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 from jlens_mlx.capture import ModelAdapter, capture_residuals  # noqa: E402
 from jlens_mlx.lens import JSpaceLens  # noqa: E402
 
-FIX = ROOT / "migrated_from_scratch"
+FIX = ROOT / "tests" / "golden"
 
 
 def cos(a, b) -> float:

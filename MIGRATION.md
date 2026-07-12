@@ -1,6 +1,6 @@
 # Migration + port checklist
 
-Last updated: 2026-07-10
+Last updated: 2026-07-12
 
 > **PIVOT NOTE (2026-07-10):** the vendored seed was REMOVED (owner preference + a bug we
 > caught in it). The fitter now ports from **Anthropic's `jacobian-lens`** (direct
@@ -12,18 +12,23 @@ Last updated: 2026-07-10
 
 How this repo gets from scaffold to "fits our own lens."
 
-## 1. Relocated Phase-1 spike (`migrated_from_scratch/`)
+## 1. Relocated Phase-1 spike (`migrated_from_scratch/`) — cleanup executed 2026-07-12
 
 The heylook server's gitignored `coderef/jspace_scratch/` verifier spike was moved here
-verbatim (its data — `*.npz` / `*.safetensors` — is gitignored). Sort it:
+verbatim (its data — `*.npz` / `*.safetensors` — is gitignored). Disposition:
 
-| File | Becomes |
-|---|---|
-| `make_oracle.py`, `convert_lens.py` | the research converter / oracle generator here (fold into `verify.py` + a `scripts/` entry) |
-| `mlx_apply.py`, `mlx_apply_gemma.py` | the parity harness → `jlens_mlx/verify.py::parity_vs_oracle` |
-| `validate_moe.py`, `verify_router.py`, `verify_module.py` | research verification → `tests/` here |
-| `verify_endpoint.py`, `probe_thread.py` | **belong in the heylookitsanllm server** (they test the running endpoint / MLX thread semantics) — hand back as real server tests, do not keep here |
-| `oracle_*.npz/json`, `lens_gpt2.*` | parity fixtures; tiny `gpt2` ones → server `tests/golden/` for the standing gate |
+| File | Disposition | Status |
+|---|---|---|
+| `oracle_eiffel.*`, `oracle_multihop.*`, `lens_gpt2.*` | gpt2 golden fixtures for the standing parity gate | **DONE** → `tests/golden/` (`.json`/`.sidecar.json` tracked, `.npz`/`.safetensors` gitignored); `scripts/check_gpt2_parity.py` reads from there now |
+| `make_oracle.py`, `convert_lens.py` | the torch-venv regeneration path for those golden fixtures | **DONE** → `scripts/make_oracle.py`, `scripts/convert_lens.py` |
+| `mlx_apply.py` | fully superseded by `scripts/check_gpt2_parity.py` | **DONE** — removed (content remains in git history) |
+| `probe_thread.py`, `verify_endpoint.py` | test the running heylookitsanllm endpoint / MLX thread semantics, not this repo — import `heylook_llm.*` and cannot run here | **DONE** — removed; belong in the server repo as real server tests, not reproduced here (content remains in git history) |
+| `validate_moe.py`, `verify_router.py`, `verify_module.py` | correction: an earlier pass of this table miscategorized these as "research verification → `tests/` here" — all three actually import `heylook_llm.*` (a different project) and cannot run in this repo | `verify_module.py` is foreign/superseded like `mlx_apply.py` — **DONE**, removed. `validate_moe.py` and `verify_router.py` have reference value — **DONE**, moved to `internal/reference/` (gitignored, local-only, untracked) |
+| `mlx_apply_gemma.py`, `lens_gemma22b.*`, `oracle_gemma22b_*.*`, `README.md` | gemma2 real-weights parity gate | **PENDING** — left in place, tracked (binaries stay gitignored), awaiting a future gemma2 parity-gate session; not built yet |
+
+After this pass, `migrated_from_scratch/` holds only the gemma set above plus its own
+`README.md` — everything else has graduated into this repo's real layout
+(`tests/golden/`, `scripts/`) or been removed/relocated per the corrected table.
 
 ## 2. Modularize the vendored `qwen3_5` seed
 

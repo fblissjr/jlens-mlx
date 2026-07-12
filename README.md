@@ -75,8 +75,8 @@ jlens_mlx/
   corpus.py           # Recipe + PositionMask + streaming on-policy corpus builder (provenance-stamped)
   lens.py             # save/load safetensors + sidecar; transport + unembed (apply, mirrors the server)
   verify.py           # held-out per-layer fidelity gate (KL identity tripwire) + lens diffing
-migrated_from_scratch/# the heylook Phase-1 verifier spike, relocated here
-tests/                # CPU unit tests (test_corpus.py); run: uv run pytest tests/ -q
+migrated_from_scratch/# gemma22b parity fixtures pending a real-weights gate (MIGRATION.md §1)
+tests/                # CPU unit tests (test_corpus.py) + golden/ gpt2 parity fixtures; run: uv run pytest tests/ -q
 scripts/              # gates (check_{gpt2_parity,qwen3_5_synthetic,chain_vs_direct}, ...) + fit drivers
 docs/DESIGN.md        # the fitter + corpus design
 ```

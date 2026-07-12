@@ -5,6 +5,7 @@
 #   LENS_PT   (path to the lens .pt; else resolved under $HF_HOME/hub)
 #   PREFIX    (default gpt2)      -> lens_<PREFIX>.safetensors, oracle_<PREFIX>_<slug>.npz
 #   JSPACE_OUT (output dir)
+# Regenerates the golden fixtures consumed by scripts/check_gpt2_parity.py (tests/golden/).
 import os, glob, json
 import numpy as np
 import torch

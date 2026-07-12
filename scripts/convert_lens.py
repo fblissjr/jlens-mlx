@@ -1,5 +1,6 @@
 # Convert a jlens .pt (JacobianLens) to mx-safetensors + sidecar. Torch env,
 # NO model load. Args: <lens.pt> <out_dir> <prefix> [hf_name] [softcap]
+# Regenerates the golden fixtures consumed by scripts/check_gpt2_parity.py (tests/golden/).
 import json, os, sys
 import torch
 import jlens
