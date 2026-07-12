@@ -375,6 +375,14 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
         n += 1
         secs = time.perf_counter() - t0
         peak_gb = mx.get_peak_memory() / 1e9
+        # Release MLX's buffer cache back to the OS between items. MLX caches freed buffers and
+        # reuses them, but never returns them, so a process pins RSS at the max item's high-water
+        # (~161GB for the 27B band) for its whole life -- even while fitting a tiny item. On a
+        # 192GB box that leaves ~30GB for the OS, and a transient spike at an item transition trips
+        # the macOS memory-pressure killer (SIGKILL/137). reset_peak_memory() only resets the
+        # counter, not the pool; clear_cache() actually frees it. Cheap: the next item re-allocates
+        # from a cold pool in well under a second, negligible against a ~40-min item.
+        mx.clear_cache()
         item_sec_per_pos = (secs / len(item.positions)) if item.positions else None
 
         # Update the running rate AFTER this item, then compute its own ETA -- except the very
