@@ -9,6 +9,7 @@ Run (from the heylook dir / venv):  uv run pytest <jlens-mlx>/tests/test_corpus.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from jlens_mlx.corpus import (  # noqa: E402
     ABLITERATED_QWEN, SAFETY_BENIGN, SAFETY_HARMFUL, WIKITEXT_CONTROL,
     Corpus, CorpusItem, PositionMask, Recipe, Stratum,
-    _extract_prompt, _prompt_fits, _weighted_counts, build_positions, decode_corpus,
+    _chat_ids, _extract_prompt, _prompt_fits, _weighted_counts,
+    build_positions, decode_corpus, diversity_report,
 )
 
 
@@ -99,6 +101,26 @@ def test_positions_on_policy_span():
 
 def test_positions_human_text_span():
     # no completion: content span inside the prompt, drop BOS/scaffold (skip_first) + last
+    pos = build_positions(list(range(10)), prompt_prefix_len=10, mask=PositionMask(), skip_first=4)
+    assert pos == list(range(4, 9))
+
+
+def test_positions_human_text_content_span_role_aware():
+    # No completion, but content_start/content_end are supplied (the ROLE-AWARE span from
+    # _user_content_span, computed from the actual chat template): ids stand in for a
+    # genprompt-included off-policy render whose real user content only spans [4, 14); tokens
+    # 14..19 stand in for the trailing <|im_start|>assistant\n<think>... scaffold that
+    # add_generation_prompt=True appended. Positions must start at content_start and stop BEFORE
+    # content_end, never touching the trailing scaffold.
+    ids = list(range(20))
+    pos = build_positions(ids, prompt_prefix_len=20, mask=PositionMask(),
+                          content_start=4, content_end=14)
+    assert pos == list(range(4, 14))
+
+
+def test_positions_human_text_skip_first_unchanged_when_content_span_omitted():
+    # When content_start/content_end are NOT supplied, the old skip_first-based fallback must be
+    # completely unchanged (no regression from adding the role-aware path).
     pos = build_positions(list(range(10)), prompt_prefix_len=10, mask=PositionMask(), skip_first=4)
     assert pos == list(range(4, 9))
 
@@ -219,6 +241,7 @@ def test_recipe_defaults():
     r = Recipe(name="d")
     assert r.n_prompts == 300 and r.chat_templated and 0 <= r.on_policy_fraction <= 1
     assert isinstance(r.positions, PositionMask)
+    assert r.enable_thinking is False
 
 
 def test_corpus_json_roundtrip(tmp_path):
@@ -237,3 +260,142 @@ def test_corpus_json_roundtrip(tmp_path):
     assert [it.on_policy for it in loaded.items] == [True, False]
     assert loaded.provenance == c.provenance
     assert loaded.recipe.name == ABLITERATED_QWEN.name
+
+
+# --- diversity_report (corpus diversity gate) ------------------------------------------------
+# Regression proof for the 7h-of-GPU-time incident: a corpus whose fitted positions are mostly
+# shared/boilerplate tokens (rather than diverse content) yields a near-useless averaged
+# Jacobian. `shared_fraction` over the fitted-position tokens is the gate metric.
+
+def test_diversity_report_structure_keys():
+    items = [CorpusItem([1, 2, 3], [0, 1], "chat", True), CorpusItem([4, 5, 6], [0, 1], "safety", False)]
+    d = diversity_report(items)
+    for key in ("n_items", "total_positions", "unique_token_types", "shared_fraction", "on_policy", "off_policy"):
+        assert key in d
+    for sub in (d["on_policy"], d["off_policy"]):
+        for key in ("n_items", "total_positions", "unique_token_types", "shared_fraction"):
+            assert key in sub
+    assert d["on_policy"]["n_items"] == 1 and d["off_policy"]["n_items"] == 1
+
+
+def test_diversity_report_degenerate_shared_tokens():
+    # 6 items whose fitted positions mostly point at the SAME repeated token id (99), varying
+    # only one trailing position per item -- a near-degenerate/boilerplate-heavy corpus.
+    items = []
+    for i in range(6):
+        ids = [10, 11, 99, 99, 99, 99, 12]
+        positions = [2, 3, 4, 5]  # 4 fitted positions per item, all pointing at id 99 by default
+        items.append(CorpusItem(list(ids), list(positions), "chat", False))
+    # Vary the LAST fitted position for two items so it's not literally identical across the board.
+    items[0].ids[5] = 77
+    items[1].ids[5] = 78
+
+    d = diversity_report(items)
+    assert d["n_items"] == 6
+    assert d["total_positions"] == 24  # 6 items * 4 positions each
+    assert d["shared_fraction"] > 0.9
+
+
+def test_diversity_report_diverse_disjoint_tokens():
+    # 6 items whose fitted-position tokens are entirely disjoint token ids across items -- no
+    # token id repeats across enough items to be "shared".
+    items = [CorpusItem([i * 100, i * 100 + 1, i * 100 + 2], [0, 1, 2], "chat", False)
+             for i in range(6)]
+    d = diversity_report(items)
+    assert d["n_items"] == 6
+    assert d["total_positions"] == 18
+    assert d["shared_fraction"] < 0.1
+
+
+def test_diversity_report_band_n12b_corpus_regression():
+    # The REAL degenerate corpus that cost 7h of GPU time: this is the regression proof that the
+    # gate would have caught it. Fixture derived from a real checkpoint's corpus.json with token
+    # ids ANONYMIZED via a dense equality-preserving remap -- diversity_report depends only on
+    # id equality, so shared_fraction is preserved exactly while the fixture stays undecodable
+    # (the raw corpus carries content that must not be committed; see decode_corpus's header).
+    fixture = Path(__file__).parent / "fixtures" / "band-n12b-corpus.json"
+    corpus = Corpus.from_json(fixture)
+    d = diversity_report(corpus.items)
+    assert d["shared_fraction"] > 0.5
+
+
+# --- _chat_ids / enable_thinking (real tokenizer, chat-template-dependent) --------------------
+# Confirms the core fix: passing enable_thinking explicitly always overrides mlx_lm's
+# TokenizerWrapper.apply_chat_template implicit default (self.has_thinking when the kwarg is
+# omitted). Needs a REAL local tokenizer dir (no weights loaded) -- skips cleanly if unset.
+
+def test_chat_ids_enable_thinking_explicit_override():
+    tok_path = os.environ.get("JLENS_TEST_TOKENIZER")
+    if not tok_path:
+        pytest.skip("JLENS_TEST_TOKENIZER not set")
+    if not Path(tok_path).exists():
+        pytest.skip(f"JLENS_TEST_TOKENIZER path does not exist: {tok_path}")
+
+    def _render(tokenizer, enable_thinking: bool) -> str:
+        return tokenizer.apply_chat_template(
+            [{"role": "user", "content": "hi"}], add_generation_prompt=True, tokenize=False,
+            enable_thinking=enable_thinking)
+
+    tokenizer = None
+    try:
+        from transformers import AutoTokenizer
+        candidate = AutoTokenizer.from_pretrained(tok_path)
+        # A raw AutoTokenizer from a local mlx model dir may lack the jinja chat template (some
+        # dirs ship it as a separate *.jinja file) -- verify the render actually carries a think
+        # tag before trusting it; otherwise fall back to mlx_lm's loader.
+        if getattr(candidate, "chat_template", None) and "<think>" in _render(candidate, False):
+            tokenizer = candidate
+    except Exception:
+        tokenizer = None
+    if tokenizer is None:
+        from mlx_lm import load
+        tokenizer = load(tok_path)[1]
+
+    # Exercise the actual _chat_ids call path (tokenize=True) to confirm it runs end to end.
+    ids_off = _chat_ids(tokenizer, "hi", add_generation_prompt=True, enable_thinking=False)
+    ids_on = _chat_ids(tokenizer, "hi", add_generation_prompt=True, enable_thinking=True)
+    assert ids_off and ids_on
+
+    text_off = _render(tokenizer, enable_thinking=False)
+    text_on = _render(tokenizer, enable_thinking=True)
+
+    # enable_thinking=False -> a CLOSED empty think block trails the prompt.
+    assert text_off.endswith("<think>\n\n</think>\n\n"), text_off[-60:]
+    # enable_thinking=True -> an OPEN think tag (not closed) trails the prompt.
+    assert text_on.endswith("<think>\n"), text_on[-60:]
+
+
+# --- attention-sink floor (min_position / SINK_SKIP) ------------------------------------------
+
+def test_sink_skip_constant():
+    # Floor from the reference implementation this repo ports: early positions act as
+    # attention sinks with atypical residual statistics and must not enter the Jacobian average.
+    from jlens_mlx.corpus import SINK_SKIP
+    assert SINK_SKIP == 16
+
+
+def test_build_positions_min_position_floors_off_policy_content_start():
+    ids = list(range(40))
+    pos = build_positions(ids, 40, PositionMask(), content_start=5, content_end=30,
+                          min_position=16)
+    assert pos[0] == 16 and pos[-1] == 29
+
+
+def test_build_positions_min_position_floors_on_policy_span():
+    ids = list(range(40))  # completion spans [10, 39)
+    pos = build_positions(ids, 10, PositionMask(), min_position=16)
+    assert pos and pos[0] == 16 and all(p >= 16 for p in pos)
+
+
+def test_build_positions_min_position_default_zero_keeps_old_behavior():
+    ids = list(range(40))
+    pos = build_positions(ids, 40, PositionMask(), content_start=5, content_end=30)
+    assert pos[0] == 5
+
+
+def test_build_positions_min_position_all_filtered_falls_back():
+    # Everything below the floor: the [n-2] safety fallback must still fire (never empty).
+    ids = list(range(12))
+    pos = build_positions(ids, 12, PositionMask(), content_start=2, content_end=8,
+                          min_position=16)
+    assert pos == [10]

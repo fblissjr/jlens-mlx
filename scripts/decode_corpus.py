@@ -24,6 +24,11 @@ from jlens_mlx.corpus import Corpus, decode_corpus  # noqa: E402
 def _load_tokenizer(model_path: str):
     """Decode only needs the vocab, not the chat template — try the light AutoTokenizer first,
     fall back to mlx-lm's loader (which loads model weights too, slower)."""
+    if os.path.exists(model_path):
+        # mlx_lm.utils.load / AutoTokenizer.from_pretrained treat a non-existent-as-given
+        # relative path as an HF repo id (HFValidationError) -- resolve a real local dir to
+        # absolute before it's passed to either loader.
+        model_path = os.path.abspath(model_path)
     try:
         from transformers import AutoTokenizer
         return AutoTokenizer.from_pretrained(model_path)

@@ -3,7 +3,9 @@
 Corpus choice is load-bearing — fitting a Jacobian lens averages the network's input→output
 Jacobian over the corpus's activation distribution, exactly like quantization-calibration data
 (see docs/DESIGN.md). So the corpus is a first-class, swappable, provenance-stamped config:
-NO hardcoded WikiText, NO hardcoded "skip first 4 positions".
+NO hardcoded WikiText. Off-policy position masking is role-aware (`_user_content_span`, computed
+from the actual chat template) rather than a fixed "skip first 4" count; a `skip_first`-based
+fallback remains for callers that don't supply the computed span.
 
 For our target — an abliterated instruct Qwen thinking model — the load-bearing design is an
 OVER-WEIGHTED safety stratum + a matched-benign contrast + a WikiText control, so "what
@@ -60,6 +62,7 @@ class Recipe:
     chat_templated: bool = True       # render through the model's own chat template
     on_policy_fraction: float = 0.6   # 0 = human text only; 0.5-0.7 for a chat/reasoning lens
     positions: PositionMask = field(default_factory=PositionMask)
+    enable_thinking: bool = False     # explicit override passed to apply_chat_template (never omitted)
 
 
 @dataclass
@@ -287,10 +290,16 @@ def _weighted_counts(recipe: Recipe) -> list[int]:
     return counts
 
 
-def _chat_ids(tokenizer, user_text: str, *, add_generation_prompt: bool) -> list[int]:
+def _chat_ids(tokenizer, user_text: str, *, add_generation_prompt: bool,
+             enable_thinking: bool = False) -> list[int]:
+    """`enable_thinking` is ALWAYS passed explicitly: mlx_lm's TokenizerWrapper.apply_chat_template
+    defaults `enable_thinking` to `self.has_thinking` when the kwarg is omitted, which silently
+    flips corpus behavior between thinking/non-thinking models. Passing it explicitly (True or
+    False) always overrides that implicit default."""
     return list(tokenizer.apply_chat_template(
         [{"role": "user", "content": user_text}],
-        add_generation_prompt=add_generation_prompt, tokenize=True))
+        add_generation_prompt=add_generation_prompt, tokenize=True,
+        enable_thinking=enable_thinking))
 
 
 def _prompt_fits(prefix_len: int, max_seq_len: int | None, reserve: int = 0) -> bool:
@@ -309,18 +318,72 @@ def _prompt_fits(prefix_len: int, max_seq_len: int | None, reserve: int = 0) -> 
     return prefix_len + max(0, reserve) <= max_seq_len
 
 
+def _common_prefix_len(a: list[int], b: list[int]) -> int:
+    """Length of the shared leading run of two token-id sequences."""
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
+def _user_content_span(tokenizer, user_text: str, *, enable_thinking: bool) -> tuple[int, int]:
+    """(start, end) token-index bounds of the user's OWN content within the
+    add_generation_prompt=False chat-templated rendering of a single user turn: `start` excludes
+    the leading role/system scaffold (found via common-prefix diff against an EMPTY-content
+    render of the same recipe) and `end` excludes the closing <|im_end|> of the user turn (found
+    by inspecting the actual token id via tokenizer.encode, never hardcoded). Replaces the old
+    hardcoded skip_first=4."""
+    ids_empty = _chat_ids(tokenizer, "", add_generation_prompt=False, enable_thinking=enable_thinking)
+    ids_real = _chat_ids(tokenizer, user_text, add_generation_prompt=False, enable_thinking=enable_thinking)
+    start = _common_prefix_len(ids_empty, ids_real)
+    end = len(ids_real)
+    im_end_id = None
+    try:
+        enc = tokenizer.encode("<|im_end|>", add_special_tokens=False)
+        if enc:
+            im_end_id = enc[-1]
+    except Exception:
+        pass
+    if im_end_id is not None and end > start and ids_real[end - 1] == im_end_id:
+        end -= 1
+    start = min(start, end)
+    return start, end
+
+
+# Attention-sink floor, from the reference jacobian-lens implementation this repo ports
+# (its SKIP_FIRST_N_POSITIONS): early positions act as attention sinks and have atypical
+# residual statistics, so they are excluded from the Jacobian average regardless of where
+# the role scaffold ends. Applied via build_positions(min_position=...) by build_corpus.
+SINK_SKIP = 16
+
+
 def build_positions(ids: list[int], prompt_prefix_len: int, mask: PositionMask,
                     *, think_span: tuple[int, int] | None = None,
-                    skip_first: int = 4) -> list[int]:
+                    content_start: int | None = None,
+                    content_end: int | None = None,
+                    skip_first: int = 4,
+                    min_position: int = 0) -> list[int]:
     """Positions the Jacobian is averaged over, per `mask`. `prompt_prefix_len` is the length
     of the chat-templated prompt through the generation-prompt (so ids[prompt_prefix_len:] is the
     assistant completion, when present).
 
+    Pure function over ids + explicit ints — no tokenizer dependency, so it stays unit-testable
+    with synthetic ids. Any tokenizer-touching work (computing `content_start`/`content_end`)
+    happens in `_user_content_span`, called by the caller (`build_corpus`).
+
     - Completion present (on-policy): the assistant span [prompt_prefix_len, len-1). If
       `think_span` is given and `mask.include_think` but not `mask.include_assistant`, restrict
       to the think span. Drops the final position (no next-token target).
-    - No completion (human-text): a content span inside the prompt, dropping the BOS/role
-      scaffold via `skip_first` and the final generation-prompt position.
+    - No completion (human-text): a content span inside the prompt. If `content_start`/
+      `content_end` are given (the ROLE-AWARE span from `_user_content_span`, computed from the
+      actual template rather than a fixed count), use them, clamped to a valid non-empty range.
+      Otherwise fall back to the old `skip_first`-based heuristic (a fixed count from the start),
+      kept only for callers that don't supply the computed span.
+    - `min_position` (build_corpus passes `SINK_SKIP`): hard floor applied to BOTH branches
+      after span selection -- attention-sink positions never enter the Jacobian average, even
+      when the role scaffold or completion starts earlier.
     """
     n = len(ids)
     if n < 2:
@@ -333,20 +396,28 @@ def build_positions(ids: list[int], prompt_prefix_len: int, mask: PositionMask,
         elif think_span and not mask.include_think and mask.include_assistant:
             # assistant-minus-think: keep [prefix, think_start) + [think_end, len-1)
             keep = [p for p in range(prompt_prefix_len, n - 1)
-                    if not (think_span[0] <= p < think_span[1])]
+                    if not (think_span[0] <= p < think_span[1]) and p >= min_position]
             return keep or [n - 2]
         pos = list(range(lo, hi))
     else:
-        start = skip_first if mask.drop_bos_sink or mask.drop_role_tokens else 0
-        start = min(start, max(0, prompt_prefix_len - 2))
-        pos = list(range(start, prompt_prefix_len - 1))
+        if content_start is not None or content_end is not None:
+            end = min(content_end if content_end is not None else prompt_prefix_len - 1, n)
+            start = min(content_start if content_start is not None else 0, max(0, end - 1))
+            pos = list(range(start, end))
+        else:
+            start = skip_first if mask.drop_bos_sink or mask.drop_role_tokens else 0
+            start = min(start, max(0, prompt_prefix_len - 2))
+            pos = list(range(start, prompt_prefix_len - 1))
+    if min_position:
+        pos = [p for p in pos if p >= min_position]
     if mask.predicate is not None:
         pos = [p for p in pos if mask.predicate(ids[p], p, "assistant" if has_completion else "user")]
     return pos or [n - 2]
 
 
 def generate_on_policy(model, tokenizer, user_texts: list[str], *, max_tokens: int = 64,
-                       temp: float = 0.7, seed: int = 0) -> list[list[int]]:
+                       temp: float = 0.7, seed: int = 0,
+                       enable_thinking: bool = False) -> list[list[int]]:
     """GPU step (separated so the offline corpus build needs no model/server): for each user
     text, chat-template with a generation prompt and append the model's OWN sampled completion.
     Returns the full token-id sequence per prompt (prompt-prefix + generated assistant span).
@@ -361,7 +432,8 @@ def generate_on_policy(model, tokenizer, user_texts: list[str], *, max_tokens: i
     sampler = make_sampler(temp=temp)
     out = []
     for text in user_texts:
-        prompt_ids = _chat_ids(tokenizer, text, add_generation_prompt=True)
+        prompt_ids = _chat_ids(tokenizer, text, add_generation_prompt=True,
+                               enable_thinking=enable_thinking)
         gen_ids = []
         for resp in stream_generate(model, tokenizer, prompt=prompt_ids,
                                     max_tokens=max_tokens, sampler=sampler):
@@ -370,8 +442,48 @@ def generate_on_policy(model, tokenizer, user_texts: list[str], *, max_tokens: i
     return out
 
 
+def diversity_report(items: list["CorpusItem"]) -> dict:
+    """Corpus diversity gate: over ALL items' fitted-position tokens (`ids[p]` for `p` in
+    `positions`, guarding `0 <= p < len(ids)`), report how much of the averaged Jacobian would
+    be estimated from a handful of SHARED/boilerplate tokens rather than diverse content.
+
+    Returns `n_items`, `total_positions` (sum of valid fitted-position counts), `unique_token_types`
+    (distinct token ids seen at any fitted position), and `shared_fraction` (fraction of fitted-
+    position TOKENS -- not types -- whose token id appears at a fitted position in
+    `>= max(3, len(items)//2)` DISTINCT items), plus `on_policy`/`off_policy` sub-dicts with the
+    same four keys, computed by splitting `items` on `.on_policy` first (each sub-dict uses its
+    OWN threshold based on its own item count; the top-level `shared_fraction` uses its own
+    threshold over ALL items, not a combination of the two splits).
+    """
+    def _stats(subset: list["CorpusItem"]) -> dict:
+        n_items = len(subset)
+        total_positions = 0
+        token_item_ids: dict[int, set[int]] = {}   # token id -> set of item indices it appears in
+        per_item_tokens: list[list[int]] = []
+        for idx, it in enumerate(subset):
+            toks = [it.ids[p] for p in it.positions if 0 <= p < len(it.ids)]
+            per_item_tokens.append(toks)
+            total_positions += len(toks)
+            for t in set(toks):
+                token_item_ids.setdefault(t, set()).add(idx)
+        unique_token_types = len(token_item_ids)
+        threshold = max(3, n_items // 2)
+        shared_ids = {t for t, item_ids in token_item_ids.items() if len(item_ids) >= threshold}
+        shared_tokens = sum(1 for toks in per_item_tokens for t in toks if t in shared_ids)
+        shared_fraction = (shared_tokens / total_positions) if total_positions else 0.0
+        return {"n_items": n_items, "total_positions": total_positions,
+                "unique_token_types": unique_token_types, "shared_fraction": shared_fraction}
+
+    on_policy_items = [it for it in items if it.on_policy]
+    off_policy_items = [it for it in items if not it.on_policy]
+    report = _stats(items)
+    report["on_policy"] = _stats(on_policy_items)
+    report["off_policy"] = _stats(off_policy_items)
+    return report
+
+
 def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int = 64,
-                 max_seq_len: int | None = 512) -> Corpus:
+                 max_seq_len: int | None = 512, decoded_path: str | None = None) -> Corpus:
     """Render `recipe` into a Corpus of chat-templated, position-masked prompts.
 
     Offline (no model needed): stream + weight-sample each stratum, chat-template, tokenize, and
@@ -393,11 +505,15 @@ def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int 
 
     Gated datasets (LMSYS/AdvBench/wildjailbreak) need an HF token; the recipes prefer ungated
     MIT/ODC-BY substitutes. Keep raw user prompts internal (ODC-BY attribution).
+
+    `decoded_path`, if given, writes a human-readable decode of the built corpus there (via
+    `decode_corpus`, best-effort -- a decode failure doesn't fail the build).
     """
     # Guard: a real chat template must expand a probe to a non-trivial ChatML sequence. Catches
     # a template-less tokenizer before a whole corpus is built with empty prompts.
     if recipe.chat_templated:
-        probe = _chat_ids(tokenizer, "probe", add_generation_prompt=True)
+        probe = _chat_ids(tokenizer, "probe", add_generation_prompt=True,
+                          enable_thinking=recipe.enable_thinking)
         if len(probe) < 5:
             raise ValueError(
                 "tokenizer produced a near-empty chat-templated sequence for a probe prompt "
@@ -429,35 +545,58 @@ def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int 
         if op_texts:
             fit_texts = []
             for text in op_texts:
-                prefix = len(_chat_ids(tokenizer, text, add_generation_prompt=True))
+                prefix = len(_chat_ids(tokenizer, text, add_generation_prompt=True,
+                                       enable_thinking=recipe.enable_thinking))
                 if _prompt_fits(prefix, max_seq_len, reserve=on_policy_max_tokens):
                     fit_texts.append((text, prefix))
                 else:
                     dropped += 1
             if fit_texts:
                 full_seqs = generate_on_policy(model, tokenizer, [t for t, _ in fit_texts],
-                                               max_tokens=on_policy_max_tokens, seed=recipe.seed)
+                                               max_tokens=on_policy_max_tokens, seed=recipe.seed,
+                                               enable_thinking=recipe.enable_thinking)
                 for (text, prefix), ids in zip(fit_texts, full_seqs):
-                    pos = build_positions(ids, prefix, recipe.positions)
+                    pos = build_positions(ids, prefix, recipe.positions,
+                                          min_position=SINK_SKIP)
                     items.append(CorpusItem(ids, pos, stratum.kind, on_policy=True))
 
         for text in human_texts:
-            ids = _chat_ids(tokenizer, text, add_generation_prompt=recipe.chat_templated)
+            ids = _chat_ids(tokenizer, text, add_generation_prompt=recipe.chat_templated,
+                            enable_thinking=recipe.enable_thinking)
             if not _prompt_fits(len(ids), max_seq_len):  # no completion -> gate the whole prompt
                 dropped += 1
                 continue
             prefix = len(ids)  # no completion -> the whole thing is the prompt prefix
-            pos = build_positions(ids, prefix, recipe.positions)
+            content_start, content_end = _user_content_span(
+                tokenizer, text, enable_thinking=recipe.enable_thinking)
+            pos = build_positions(ids, prefix, recipe.positions,
+                                  content_start=content_start, content_end=content_end,
+                                  min_position=SINK_SKIP)
             items.append(CorpusItem(ids, pos, stratum.kind, on_policy=False))
+
+    diversity = diversity_report(items)
+    print(f"diversity: total_positions={diversity['total_positions']} "
+          f"unique_types={diversity['unique_token_types']} "
+          f"shared_fraction={diversity['shared_fraction']:.2f}", flush=True)
 
     provenance = {
         "recipe": recipe.name,
         "n_prompts": len(items),
         "on_policy_fraction": recipe.on_policy_fraction if model is not None else 0.0,
         "chat_templated": recipe.chat_templated,
+        "enable_thinking": recipe.enable_thinking,
         "strata": prov_counts,
         "seed": recipe.seed,
         "max_seq_len": max_seq_len,
         "dropped_over_len": dropped,
+        "diversity": diversity,
     }
-    return Corpus(recipe=recipe, items=items, provenance=provenance)
+    corpus = Corpus(recipe=recipe, items=items, provenance=provenance)
+    if decoded_path is not None:
+        try:
+            from pathlib import Path as _Path
+            _Path(decoded_path).parent.mkdir(parents=True, exist_ok=True)
+            _Path(decoded_path).write_text(decode_corpus(corpus, tokenizer))
+        except Exception as e:
+            print(f"  (decode_corpus skipped: {e})", flush=True)
+    return corpus

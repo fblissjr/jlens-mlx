@@ -65,6 +65,10 @@ def main() -> int:
     if not model_path:
         print("set JLENS_MODEL to the served model dir")
         return 2
+    if os.path.exists(model_path):
+        # mlx_lm.utils.load treats a non-existent-as-given relative path as an HF repo id
+        # (HFValidationError) -- resolve a real local dir to absolute before it's passed in.
+        model_path = os.path.abspath(model_path)
 
     t0 = time.perf_counter()
     model, tokenizer = load(model_path)
@@ -90,9 +94,10 @@ def main() -> int:
 
     recipe = BAND_BOOTSTRAP
     if os.environ.get("JLENS_N"):
-        recipe = C.Recipe(name=recipe.name, strata=recipe.strata, n_prompts=int(os.environ["JLENS_N"]),
-                          seed=recipe.seed, chat_templated=recipe.chat_templated,
-                          on_policy_fraction=recipe.on_policy_fraction, positions=recipe.positions)
+        import dataclasses
+        # dataclasses.replace copies ALL fields (incl. enable_thinking) -- a hand-rolled
+        # field list here silently dropped new Recipe fields once already.
+        recipe = dataclasses.replace(recipe, n_prompts=int(os.environ["JLENS_N"]))
 
     # Checkpoint dir: the serialized corpus + running J_sum live here so a killed fit RESUMES
     # (skips on-policy generation + completed items) instead of losing everything.
@@ -100,10 +105,19 @@ def main() -> int:
     ckpt_dir = os.path.join(out, "ckpt")
     corpus_json = os.path.join(ckpt_dir, "corpus.json")
 
+    decoded_path = os.path.join(ckpt_dir, "corpus_decoded.md")
     if os.path.exists(corpus_json):
         corpus = C.Corpus.from_json(corpus_json)
         print(f"RESUME: loaded {len(corpus.items)} corpus items from {corpus_json} "
               f"(skipping build + on-policy generation)", flush=True)
+        if not os.path.exists(decoded_path):
+            # Older checkpoint predating the default decode-at-build -- regenerate it.
+            try:
+                Path(decoded_path).write_text(C.decode_corpus(corpus, tokenizer))
+                print(f"  decoded corpus -> {decoded_path} (local-only inspection, regenerated "
+                      f"for an older checkpoint)", flush=True)
+            except Exception as e:
+                print(f"  (decode_corpus skipped: {e})", flush=True)
     else:
         print(f"building corpus ({recipe.name}, n={recipe.n_prompts}, "
               f"on_policy={recipe.on_policy_fraction}) -- streaming + on-policy generation...",
@@ -114,17 +128,9 @@ def main() -> int:
         max_seq_len = int(os.environ.get("JLENS_MAX_SEQ_LEN", 512))
         corpus = C.build_corpus(model, tokenizer, recipe,
                                 on_policy_max_tokens=int(os.environ.get("JLENS_ONPOLICY_TOKENS", 48)),
-                                max_seq_len=max_seq_len)
+                                max_seq_len=max_seq_len, decoded_path=decoded_path)
         corpus.to_json(corpus_json)
-        # Store a human-readable decode by default (local-only; raw prompts + on-policy gens) so the
-        # corpus is inspectable without a separate step -- esp. what the abliterated model generated.
-        try:
-            decoded_path = os.path.join(ckpt_dir, "corpus_decoded.md")
-            with open(decoded_path, "w") as f:
-                f.write(C.decode_corpus(corpus, tokenizer))
-            print(f"  decoded corpus -> {decoded_path} (local-only inspection)", flush=True)
-        except Exception as e:
-            print(f"  (decode_corpus skipped: {e})", flush=True)
+        print(f"  decoded corpus -> {decoded_path} (local-only inspection)", flush=True)
         print(f"  corpus: {len(corpus.items)} items in {time.perf_counter()-tc:.1f}s  "
               f"{corpus.provenance['strata']}  on_policy={sum(it.on_policy for it in corpus.items)} "
               f"  dropped_over_len={corpus.provenance['dropped_over_len']} (max_seq_len={max_seq_len}) "
@@ -133,6 +139,19 @@ def main() -> int:
     pos_lens = [len(it.positions) for it in corpus.items]
     print(f"  tok_len min/med/max={min(tok_lens)}/{sorted(tok_lens)[len(tok_lens)//2]}/{max(tok_lens)}"
           f"  pos/prompt mean={sum(pos_lens)/len(pos_lens):.1f}", flush=True)
+
+    # Corpus diversity gate: works for BOTH the build branch and the resume branch (an older
+    # checkpoint may not have provenance["diversity"] -- compute it live in that case).
+    diversity = corpus.provenance.get("diversity") or C.diversity_report(corpus.items)
+    sf = diversity.get("shared_fraction", 0.0)
+    if sf > 0.5 and os.environ.get("JLENS_ALLOW_DEGENERATE") != "1":
+        raise SystemExit(
+            f"corpus diversity gate FAILED: shared_fraction={sf:.2f} > 0.50 (fitted positions are "
+            f"mostly shared/boilerplate tokens across items) -- set JLENS_ALLOW_DEGENERATE=1 to "
+            f"override if you've inspected corpus_decoded.md and are sure this is expected")
+    elif sf > 0.35:
+        print(f"  ⚠ WARNING: corpus shared_fraction={sf:.2f} > 0.35 -- corpus may be degenerate/"
+              f"boilerplate-heavy; inspect corpus_decoded.md before a long fit", flush=True)
 
     # GDN kernel-cliff guard: the fused Metal backward is only eligible for T <= MAX_T (=128); longer
     # items SILENTLY fall to the differentiable ops fallback -- much slower + per-step-state memory
@@ -211,7 +230,8 @@ def main() -> int:
     glens = lenslib.JSpaceLens(grade, gl, D, softcap=ad.softcap, meta={"target_layer": target})
 
     def tok(m):
-        return list(tokenizer.apply_chat_template(m, add_generation_prompt=True, tokenize=True))
+        return list(tokenizer.apply_chat_template(m, add_generation_prompt=True, tokenize=True,
+                                                   enable_thinking=False))
 
     print("fidelity gate (held-out)...", flush=True)
     rep = verify.fidelity_gate(model, glens, HELD_OUT, tokenize=tok, adapter=ad,
