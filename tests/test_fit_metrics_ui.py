@@ -1,9 +1,10 @@
 """Unit + smoke tests for scripts/fit_metrics_ui.py -- the read-only fit-metrics dashboard.
 
-Builds a tiny fixture DuckDB (`dim_run` + `fact_item_fit` + the `v_peak_vs_seq`/`v_throughput`
-views, matching the exact schema scripts/fit_metrics.py is expected to produce) in `tmp_path`,
-spins up the real handler on an ephemeral port, and hits each endpoint over HTTP. NEVER touches
-the real out/fit_metrics.duckdb (a live fit may be writing to it in the main checkout).
+Builds a tiny fixture DuckDB (`dim_run` + `fact_item_fit` + the `v_peak_vs_seq`/
+`v_peak_vs_positions`/`v_throughput` views, matching the exact schema scripts/fit_metrics.py is
+expected to produce) in `tmp_path`, spins up the real handler on an ephemeral port, and hits each
+endpoint over HTTP. NEVER touches the real out/fit_metrics.duckdb (a live fit may be writing to
+it in the main checkout).
 
 Run:  uv run pytest tests/test_fit_metrics_ui.py -q
 """
@@ -24,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import scripts.fit_metrics_ui as fit_metrics_ui  # noqa: E402
 from scripts.fit_metrics_ui import (  # noqa: E402
-    build_handler, fetch_peak_vs_seq, fetch_runs, fetch_throughput, open_ro,
+    build_handler, fetch_peak_vs_positions, fetch_peak_vs_seq, fetch_runs, fetch_throughput,
+    open_ro,
 )
 
 
@@ -50,6 +52,11 @@ def _build_fixture_db(db_path: Path) -> None:
         con.execute("""
             CREATE VIEW v_peak_vs_seq AS
             SELECT run_id, item_index, seq_len, chunk_size, peak_gb, on_policy, stratum
+            FROM fact_item_fit
+        """)
+        con.execute("""
+            CREATE VIEW v_peak_vs_positions AS
+            SELECT run_id, item_index, n_positions, seq_len, chunk_size, peak_gb, on_policy, stratum
             FROM fact_item_fit
         """)
         con.execute("""
@@ -130,6 +137,15 @@ def test_fetch_functions_against_fixture(tmp_path):
         assert len(run_a_points) == 3
         assert all(p["run_id"] == "run-a" for p in run_a_points)
 
+        points_by_positions = fetch_peak_vs_positions(con)
+        assert len(points_by_positions) == 5
+        assert {p["n_positions"] for p in points_by_positions} == {32, 128, 256}
+        # every row carries both n_positions and seq_len -- the positions view is a superset.
+        assert all("n_positions" in p and "seq_len" in p for p in points_by_positions)
+        run_a_positions = fetch_peak_vs_positions(con, run_id="run-a")
+        assert len(run_a_positions) == 3
+        assert all(p["run_id"] == "run-a" for p in run_a_positions)
+
         throughput = fetch_throughput(con)
         assert {r["chunk_size"] for r in throughput} == {128, 64}
     finally:
@@ -169,6 +185,21 @@ def test_smoke_all_endpoints(tmp_path):
         filtered = json.loads(body)["points"]
         assert len(filtered) == 3
         assert all(p["run_id"] == "run-a" for p in filtered)
+
+        status, body = _get(port, "/api/peak_vs_positions")
+        assert status == 200
+        pos_points = json.loads(body)["points"]
+        assert len(pos_points) == 5
+        assert {p["n_positions"] for p in pos_points} == {32, 128, 256}
+        first_pos = pos_points[0]
+        assert set(first_pos) >= {"run_id", "item_index", "n_positions", "seq_len",
+                                   "chunk_size", "peak_gb", "on_policy", "stratum"}
+
+        status, body = _get(port, "/api/peak_vs_positions?run_id=run-a")
+        assert status == 200
+        filtered_pos = json.loads(body)["points"]
+        assert len(filtered_pos) == 3
+        assert all(p["run_id"] == "run-a" for p in filtered_pos)
 
         status, body = _get(port, "/api/throughput")
         assert status == 200
@@ -214,6 +245,9 @@ def test_smoke_missing_db_file_does_not_500(tmp_path):
         assert status == 200 and json.loads(body) == {"runs": []}
 
         status, body = _get(port, "/api/peak_vs_seq")
+        assert status == 200 and json.loads(body) == {"points": []}
+
+        status, body = _get(port, "/api/peak_vs_positions")
         assert status == 200 and json.loads(body) == {"points": []}
 
         status, body = _get(port, "/api/throughput")
@@ -298,6 +332,9 @@ def test_smoke_empty_db_no_tables_does_not_500(tmp_path):
         assert status == 200 and json.loads(body) == {"runs": []}
 
         status, body = _get(port, "/api/peak_vs_seq")
+        assert status == 200 and json.loads(body) == {"points": []}
+
+        status, body = _get(port, "/api/peak_vs_positions")
         assert status == 200 and json.loads(body) == {"points": []}
 
         status, body = _get(port, "/api/throughput")

@@ -245,6 +245,21 @@ def test_views_created_and_queryable(tmp_path):
         # ordered by seq_len ascending: item 2 (55) then item 1 (78)
         assert list(peak_vs_seq["item_index"]) == [2, 1]
 
+        # n_positions (47, 32) is the primary axis now -- peak memory clusters by fitted
+        # positions, not seq_len. The view carries BOTH columns so the seq residual is still
+        # checkable.
+        peak_vs_positions = con.execute("SELECT * FROM v_peak_vs_positions").fetchdf()
+        assert len(peak_vs_positions) == 2
+        assert set(peak_vs_positions.columns) >= {
+            "run_id", "item_index", "n_positions", "seq_len", "chunk_size", "peak_gb",
+            "on_policy", "stratum",
+        }
+        # ordered by n_positions ascending: item 2 (32 pos) then item 1 (47 pos)
+        assert list(peak_vs_positions["item_index"]) == [2, 1]
+        assert list(peak_vs_positions["n_positions"]) == [32, 47]
+        # seq_len rides along per row (item 2 -> 55 tok, item 1 -> 78 tok).
+        assert list(peak_vs_positions["seq_len"]) == [55, 78]
+
         throughput = con.execute("SELECT * FROM v_throughput ORDER BY chunk_size").fetchdf()
         assert len(throughput) == 2  # two distinct chunk sizes (64, 128)
         assert list(throughput["chunk_size"]) == [64, 128]
@@ -287,6 +302,30 @@ def test_cli_query_mode_prints_view_without_reingesting(tmp_path):
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+    con = duckdb.connect(str(db_path))
+    try:
+        n_facts_after = con.execute("SELECT count(*) FROM fact_item_fit").fetchone()[0]
+        assert n_facts_after == 2  # unchanged -- --query does not ingest
+    finally:
+        con.close()
+
+
+def test_cli_query_peak_vs_positions_prints_view_without_reingesting(tmp_path):
+    out_dir = _build_fixture(tmp_path)
+    db_path = tmp_path / "cli_query_positions_fit_metrics.duckdb"
+
+    fit_metrics.ingest(out_dir=out_dir, db_path=db_path)
+
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT_PATH), "--out", str(out_dir), "--db", str(db_path),
+         "--query", "peak_vs_positions"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "n_positions" in result.stdout
+    assert "seq_len" in result.stdout
 
     con = duckdb.connect(str(db_path))
     try:

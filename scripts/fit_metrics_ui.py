@@ -6,8 +6,8 @@ Usage:
 This is the ANALYTICAL sibling of `fit_monitor.py`: that tool watches ONE live run's
 `ckpt/*` on disk; this one reads the cross-run history that `scripts/fit_metrics.py`
 accumulates into a DuckDB store (`dim_run`, `fact_item_fit`, and the `v_peak_vs_seq`
-/ `v_throughput` views). It never touches a live fit, never touches the GPU, and
-never writes to the store.
+/ `v_peak_vs_positions` / `v_throughput` views). It never touches a live fit, never
+touches the GPU, and never writes to the store.
 
 Hard invariants:
   - stdlib + `duckdb` ONLY -- no other pip deps, no bun, no build step, no framework.
@@ -21,16 +21,18 @@ Hard invariants:
   - No client input ever becomes a filesystem path. The only client-supplied value
     that reaches a query is `?run_id=`, which is always passed as a bound DuckDB
     parameter (`?`), never string-interpolated into SQL. Route matching is an exact
-    allowlist (`/`, `/api/runs`, `/api/peak_vs_seq`, `/api/throughput`); anything
-    else, including a traversal-shaped path, is a clean 404 -- there is no
-    file-serving route here for a traversal to reach in the first place.
+    allowlist (`/`, `/api/runs`, `/api/peak_vs_seq`, `/api/peak_vs_positions`,
+    `/api/throughput`); anything else, including a traversal-shaped path, is a
+    clean 404 -- there is no file-serving route here for a traversal to reach in
+    the first place.
 
 Endpoints (all GET, all read-only):
-    /                    -- the HTML dashboard
-    /api/runs            -- {"runs": [...]}            dim_run rows (run list + config)
-    /api/peak_vs_seq      -- {"points": [...]}          v_peak_vs_seq rows, optional ?run_id=
-    /api/throughput       -- {"rows": [...]}            v_throughput rows
-    anything else         -- 404 (never a raw traceback / 500)
+    /                       -- the HTML dashboard
+    /api/runs               -- {"runs": [...]}            dim_run rows (run list + config)
+    /api/peak_vs_seq         -- {"points": [...]}          v_peak_vs_seq rows, optional ?run_id=
+    /api/peak_vs_positions   -- {"points": [...]}          v_peak_vs_positions rows, optional ?run_id=
+    /api/throughput          -- {"rows": [...]}            v_throughput rows
+    anything else            -- 404 (never a raw traceback / 500)
 """
 from __future__ import annotations
 
@@ -104,6 +106,18 @@ def fetch_peak_vs_seq(con: duckdb.DuckDBPyConnection | None, run_id: str | None 
     return rows_as_dicts(con, "SELECT * FROM v_peak_vs_seq ORDER BY seq_len")
 
 
+def fetch_peak_vs_positions(
+    con: duckdb.DuckDBPyConnection | None, run_id: str | None = None
+) -> list[dict]:
+    if con is None:
+        return []
+    if run_id:
+        return rows_as_dicts(
+            con, "SELECT * FROM v_peak_vs_positions WHERE run_id = ? ORDER BY n_positions",
+            [run_id])
+    return rows_as_dicts(con, "SELECT * FROM v_peak_vs_positions ORDER BY n_positions")
+
+
 def fetch_throughput(con: duckdb.DuckDBPyConnection | None) -> list[dict]:
     if con is None:
         return []
@@ -172,6 +186,16 @@ def build_handler(db_path: Path) -> type[BaseHTTPRequestHandler]:
                 con = open_ro(db_path)
                 try:
                     self._send_json({"points": fetch_peak_vs_seq(con, run_id)})
+                finally:
+                    if con is not None:
+                        con.close()
+                return
+
+            if path == "/api/peak_vs_positions":
+                run_id = (query.get("run_id") or [None])[0]
+                con = open_ro(db_path)
+                try:
+                    self._send_json({"points": fetch_peak_vs_positions(con, run_id)})
                 finally:
                     if con is not None:
                         con.close()
@@ -432,10 +456,10 @@ footer { text-align: center; font-size: var(--text-sm); color: var(--ink-faint);
     <div class="stat-grid" id="stat-grid"></div>
 
     <section class="panel">
-      <h2>Peak memory vs. sequence length</h2>
+      <h2>Peak memory vs. fitted positions</h2>
       <div id="peak-empty" class="empty hidden">No item-fit data yet for this selection.</div>
       <div id="peak-content">
-        <div class="chart-wrap"><svg id="peak-chart" class="chart" viewBox="0 0 780 420" role="img" aria-label="Scatter plot of peak GPU memory versus sequence length, split by chunk size, with a 192 GB unified-memory ceiling line."></svg></div>
+        <div class="chart-wrap"><svg id="peak-chart" class="chart" viewBox="0 0 780 420" role="img" aria-label="Scatter plot of peak GPU memory versus fitted positions, split by chunk size, with a 192 GB unified-memory ceiling line. Sequence length is also shown per point on hover."></svg></div>
         <div class="legend" id="peak-legend"></div>
       </div>
     </section>
@@ -536,7 +560,10 @@ function renderStats() {
   }).join('');
 }
 
-// ---- hero chart: peak_gb vs seq_len ------------------------------------------------------
+// ---- hero chart: peak_gb vs n_positions ----------------------------------------------------
+// Measured data shows peak memory clusters by FITTED POSITIONS, not sequence length (flat
+// peak_gb across seq_len 72->78 at a fixed position count) -- positions is the x-axis here;
+// seq_len rides along per point (still visible in the tooltip) so a residual can be eyeballed.
 
 function niceMax(v, floor) {
   return Math.max(floor, v);
@@ -574,17 +601,17 @@ function renderPeakChart() {
   const W = 780, H = 420, padL = 58, padR = 20, padT = 18, padB = 46;
   const innerW = W - padL - padR, innerH = H - padT - padB;
 
-  const seqLens = points.map(function (p) { return p.seq_len; });
+  const posCounts = points.map(function (p) { return p.n_positions; });
   const peaks = points.map(function (p) { return p.peak_gb; });
-  const seqMax = Math.max.apply(null, seqLens);
-  const seqMin = Math.min.apply(null, seqLens);
+  const posMax = Math.max.apply(null, posCounts);
+  const posMin = Math.min.apply(null, posCounts);
   const peakMax = Math.max.apply(null, peaks.concat([192])); // ceiling always in view
 
-  // Domain padding so 1-2 points (or all-identical seq_len) never sit flush on an axis or
+  // Domain padding so 1-2 points (or all-identical n_positions) never sit flush on an axis or
   // collapse to a zero-width domain.
-  const xSpan = Math.max(seqMax - seqMin, Math.max(seqMax * 0.15, 32));
-  const xMin = Math.max(0, seqMin - xSpan * 0.15);
-  const xMax = seqMax + xSpan * 0.25;
+  const xSpan = Math.max(posMax - posMin, Math.max(posMax * 0.15, 32));
+  const xMin = Math.max(0, posMin - xSpan * 0.15);
+  const xMax = posMax + xSpan * 0.25;
   const yMax = niceMax(peakMax * 1.12, 40);
   const yMin = 0;
 
@@ -613,7 +640,7 @@ function renderPeakChart() {
     axis += '<text x="' + x(v) + '" y="' + (padT + innerH + 16) + '" text-anchor="middle">' + Math.round(v) + '</text>';
   }
   axis += '</g>';
-  axis += '<text class="axis-title" x="' + (padL + innerW / 2) + '" y="' + (H - 6) + '" text-anchor="middle">sequence length (tokens)</text>';
+  axis += '<text class="axis-title" x="' + (padL + innerW / 2) + '" y="' + (H - 6) + '" text-anchor="middle">fitted positions</text>';
   axis += '<text class="axis-title" x="14" y="' + (padT + innerH / 2) + '" text-anchor="middle" transform="rotate(-90 14 ' + (padT + innerH / 2) + ')">peak memory (GB)</text>';
 
   // Danger band: from 90% of the ceiling up to the top of the chart -- the "approaching the
@@ -633,13 +660,13 @@ function renderPeakChart() {
   for (const p of points) {
     const s = seriesFor(p.chunk_size);
     seriesSeen[p.chunk_size] = s;
-    const cx = x(p.seq_len), cy = y(p.peak_gb);
-    const title = 'item #' + p.item_index + ' · seq ' + p.seq_len + ' tok · peak ' +
-      fmtNum(p.peak_gb, 1) + ' GB · chunk ' + p.chunk_size + ' · ' + esc(p.stratum) +
-      ' · ' + (p.on_policy ? 'on-policy' : 'off-policy');
+    const cx = x(p.n_positions), cy = y(p.peak_gb);
+    const title = 'item #' + p.item_index + ' · ' + p.n_positions + ' pos (seq ' + p.seq_len +
+      ' tok) · peak ' + fmtNum(p.peak_gb, 1) + ' GB · chunk ' + p.chunk_size + ' · ' +
+      esc(p.stratum) + ' · ' + (p.on_policy ? 'on-policy' : 'off-policy');
     const tipData = JSON.stringify({
-      item_index: p.item_index, seq_len: p.seq_len, peak_gb: p.peak_gb,
-      chunk_size: p.chunk_size, stratum: p.stratum, on_policy: p.on_policy,
+      item_index: p.item_index, n_positions: p.n_positions, seq_len: p.seq_len,
+      peak_gb: p.peak_gb, chunk_size: p.chunk_size, stratum: p.stratum, on_policy: p.on_policy,
     }).replace(/"/g, '&quot;');
     marks += '<g class="pt" tabindex="0" role="img" aria-label="' + esc(title) +
       '" data-tip="' + tipData + '" transform="translate(' + cx + ',' + cy + ')">' +
@@ -671,7 +698,7 @@ function renderPeakChart() {
     const d = JSON.parse(el.getAttribute('data-tip').replace(/&quot;/g, '"'));
     tooltip.innerHTML =
       '<div class="row">item #' + d.item_index + ' · ' + esc(d.stratum) + '</div>' +
-      '<div class="row">seq ' + d.seq_len + ' tok · chunk ' + d.chunk_size + '</div>' +
+      '<div class="row">' + d.n_positions + ' pos · seq ' + d.seq_len + ' tok · chunk ' + d.chunk_size + '</div>' +
       '<div class="row">peak ' + fmtNum(d.peak_gb, 1) + ' GB · ' + (d.on_policy ? 'on-policy' : 'off-policy') + '</div>';
     tooltip.classList.add('show');
     positionTip(evt);
@@ -845,9 +872,14 @@ function renderAll() {
 }
 
 async function loadAll() {
+  // Hero chart is charted against /api/peak_vs_positions (fitted positions drive peak memory,
+  // not sequence length) -- that view is a superset of /api/peak_vs_seq's columns plus
+  // n_positions, so state.points works unchanged for the runs table / stat tiles below.
+  // /api/peak_vs_seq stays available server-side for direct callers; this page just doesn't
+  // chart it as the default anymore.
   const [runsRes, pointsRes, throughputRes] = await Promise.all([
     fetchJSON('/api/runs').catch(function () { return { runs: [] }; }),
-    fetchJSON('/api/peak_vs_seq').catch(function () { return { points: [] }; }),
+    fetchJSON('/api/peak_vs_positions').catch(function () { return { points: [] }; }),
     fetchJSON('/api/throughput').catch(function () { return { rows: [] }; }),
   ]);
   state.runs = runsRes.runs || [];

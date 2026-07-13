@@ -8,15 +8,20 @@ other than reading it (the DuckDB file it creates/updates lives alongside them u
 out/, which is gitignored).
 
 Schema:
-    dim_run          -- one row per fit run (upserted on run_id).
-    fact_item_fit     -- one row per (run, item), append-only.
-    v_peak_vs_seq     -- peak memory vs. sequence length, per fact row.
-    v_throughput      -- throughput aggregated per chunk_size.
+    dim_run              -- one row per fit run (upserted on run_id).
+    fact_item_fit         -- one row per (run, item), append-only.
+    v_peak_vs_seq         -- peak memory vs. sequence length, per fact row.
+    v_peak_vs_positions   -- peak memory vs. fitted positions (also carries seq_len, so a
+                             consumer can plot positions AND check the seq residual). Measured
+                             data shows peak memory clusters by n_positions, not seq_len -- this
+                             is the primary axis now.
+    v_throughput          -- throughput aggregated per chunk_size.
 
 Usage:
     python scripts/fit_metrics.py --out out/band-n14-fixed
     python scripts/fit_metrics.py --out out/band-n14-fixed --db /path/to/fit_metrics.duckdb
     python scripts/fit_metrics.py --out out/band-n14-fixed --query peak_vs_seq
+    python scripts/fit_metrics.py --out out/band-n14-fixed --query peak_vs_positions
     python scripts/fit_metrics.py --out out/band-n14-fixed --query throughput
 
 Run (this repo's venv lacks duckdb -- use heylookitsanllm's venv, which has it):
@@ -251,6 +256,13 @@ FROM fact_item_fit
 ORDER BY seq_len
 """
 
+_V_PEAK_VS_POSITIONS_DDL = """
+CREATE OR REPLACE VIEW v_peak_vs_positions AS
+SELECT run_id, item_index, n_positions, seq_len, chunk_size, peak_gb, on_policy, stratum
+FROM fact_item_fit
+ORDER BY n_positions
+"""
+
 _V_THROUGHPUT_DDL = """
 CREATE OR REPLACE VIEW v_throughput AS
 SELECT
@@ -287,6 +299,7 @@ def ensure_schema(con) -> None:
     con.execute(_DIM_RUN_DDL)
     con.execute(_FACT_ITEM_FIT_DDL)
     con.execute(_V_PEAK_VS_SEQ_DDL)
+    con.execute(_V_PEAK_VS_POSITIONS_DDL)
     con.execute(_V_THROUGHPUT_DDL)
 
 
@@ -425,7 +438,11 @@ def ingest(out_dir: Path, db_path: Path) -> dict[str, Any]:
 # --- CLI ---------------------------------------------------------------------------------------
 
 def run_query(db_path: Path, query_name: str) -> None:
-    view_by_name = {"peak_vs_seq": "v_peak_vs_seq", "throughput": "v_throughput"}
+    view_by_name = {
+        "peak_vs_seq": "v_peak_vs_seq",
+        "peak_vs_positions": "v_peak_vs_positions",
+        "throughput": "v_throughput",
+    }
     view = view_by_name.get(query_name)
     if view is None:
         raise SystemExit(f"unknown --query {query_name!r}; expected one of {sorted(view_by_name)}")
@@ -452,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default=str(_DEFAULT_DB_PATH), help="Path to the shared DuckDB store")
     parser.add_argument(
         "--query",
-        choices=["peak_vs_seq", "throughput"],
+        choices=["peak_vs_seq", "peak_vs_positions", "throughput"],
         default=None,
         help="Print a view's contents and exit without ingesting",
     )
