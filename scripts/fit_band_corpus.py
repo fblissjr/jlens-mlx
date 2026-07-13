@@ -227,7 +227,7 @@ def main() -> int:
             _p(f"  checkpoint not resumed: {p.get('reason')}")
             return
         if p["skipped"]:
-            _p(f"  item {p['i']+1}/{p['n_total']}: SKIPPED (no usable positions)")
+            _p(f"  item {p['i']+1}/{p['n_total']}: SKIPPED ({p.get('skip_reason', 'no usable positions')})")
             return
         eta = p.get("eta_secs")
         eta_str = "eta pending (first item)" if eta is None else f"eta {eta/60:.0f}m (rate-based)"

@@ -359,6 +359,7 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
                                                  "use_chain": use_chain, "n_total": n_total})
             if progress:
                 progress({"i": i, "n_total": n_total, "done": n, "skipped": True,
+                          "skip_reason": f"seq {len(item.ids)} > JLENS_MAX_FIT_SEQ={max_fit_seq}",
                           "seq_len": len(item.ids), "n_pos": len(item.positions),
                           "on_policy": item.on_policy, "secs": 0.0,
                           "elapsed": time.perf_counter() - t_start, "eta_secs": None,
@@ -382,6 +383,7 @@ def fit_corpus(model, corpus, *, source_layers, adapter: ModelAdapter | None = N
                                                  "use_chain": use_chain, "n_total": n_total})
             if progress:
                 progress({"i": i, "n_total": n_total, "done": n, "skipped": True,
+                          "skip_reason": "no usable positions",
                           "seq_len": len(item.ids), "n_pos": len(item.positions),
                           "on_policy": item.on_policy, "secs": 0.0,
                           "elapsed": time.perf_counter() - t_start, "eta_secs": None,
