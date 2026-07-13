@@ -27,7 +27,8 @@ per item-fit):
 - **`dim_run`** — one row per fit run: model, band, target, `n_items`, `enable_thinking`,
   `max_seq_len`, `shared_fraction_overall`/`_onpolicy`, `dropped_over_len`, `use_chain`,
   `git_sha`. Upserted on `run_id` (= md5 of the out-dir basename).
-- Views: `v_peak_vs_seq`, `v_throughput`.
+- Views: `v_peak_vs_seq`, `v_peak_vs_positions` (peak memory vs. fitted positions —
+  the axis that actually drives peak, per §3/§4), `v_throughput`.
 
 The DB is stable and shared across runs (`out/fit_metrics.duckdb`, gitignored), so every fit
 accumulates rows and cross-run analysis becomes a query.
@@ -43,6 +44,7 @@ cd <heylook repo> && uv run python <jlens>/scripts/fit_metrics.py --out <jlens>/
 
 # print a view without ingesting
 uv run python <jlens>/scripts/fit_metrics.py --query peak_vs_seq
+uv run python <jlens>/scripts/fit_metrics.py --query peak_vs_positions
 uv run python <jlens>/scripts/fit_metrics.py --query throughput
 
 # the dashboard (read-only, styled to heylook v3's design system) on :8766
@@ -71,8 +73,9 @@ Grouped, each with the data that answers it, whether we already collect it, and 
   ~2.1GB per fitted position.** The confound: the original sample's short-sequence items also
   happened to have few fitted positions, so seq length and position count were correlated in
   that sample and the wrong one got credited as the driver. See the corrected item-10 read in
-  §4. `v_peak_vs_seq` is still the query going forward, but position count (`n_positions`), not
-  `seq_len`, is the axis that actually matters.
+  §4. `v_peak_vs_positions` (`--query peak_vs_positions`) is now the query to reach for —
+  position count (`n_positions`), not `seq_len`, is the axis that actually matters;
+  `v_peak_vs_seq` is kept for the seq-length residual check, not as the primary read.
 - **M2 — what is the true internal breakdown of the peak? Still open, and now the priority
   follow-up.** Data: `mx.get_active_memory` / `get_cache_memory` sampled around chain-sweep
   phases. Not collected. Difficulty: medium (coarse split cheap; per-tensor hard). This is

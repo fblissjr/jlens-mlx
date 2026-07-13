@@ -154,6 +154,8 @@ cd <heylook repo> && uv run python <jlens>/scripts/fit_metrics.py --out out/band
 
 # print a view without ingesting
 uv run python <jlens>/scripts/fit_metrics.py --query peak_vs_seq
+# peak vs. fitted positions -- the axis that actually drives peak memory (fit_metrics.md §3/§4)
+uv run python <jlens>/scripts/fit_metrics.py --query peak_vs_positions
 uv run python <jlens>/scripts/fit_metrics.py --query throughput
 
 # analytics dashboard over the accumulated store, :8766
