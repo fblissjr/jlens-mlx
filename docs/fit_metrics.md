@@ -60,12 +60,19 @@ Grouped, each with the data that answers it, whether we already collect it, and 
 "Being collected" = the running fit emits it; the store just structures it.
 
 ### Memory mechanics (where predictions failed — see §4)
-- **M1 — how does peak scale with sequence length? ANSWERED (measured 2026-07-12).** Peak
-  scales ~linearly with sequence length on the 27B band at chunk 64: seq 21 -> 65.3GB, seq 77 ->
-  161.1GB (slope ~1.7GB/token, intercept ~29GB ~= model weights). This is load-bearing in
-  practice: it correctly predicts item 10 (seq 126, ~245GB extrapolated) exceeds the 192GB
-  ceiling — see the item-10 drop in §4. `v_peak_vs_seq` is the query going forward as more items
-  land.
+- **M1 — how does peak scale? ANSWERED, then CORRECTED (measured 2026-07-12): the driver is
+  fitted POSITION count, not sequence length.** The original "~1.7GB/token" seq-length slope
+  was a confound. Fuller data from band-n14-fixed, as (fitted_positions, seq_len, peak_gb):
+  (1, 21, 65.3), (4, 27, 75.6), (47, 72, 162.6), (47, 73, 164.3), (47, 74, 166.0), (47, 77,
+  161.1), (47, 78, 165.8). At fixed positions=47, peak is FLAT across seq 72->78
+  (161-166GB) — a real seq-length driver at the old ~1.7GB/token slope would put seq 72 vs 78
+  roughly 10GB apart; instead the spread is noise. Peak clusters by POSITION count instead:
+  1-4 positions -> 65-76GB, 47 positions -> 161-166GB. **Corrected model: ~63GB base +
+  ~2.1GB per fitted position.** The confound: the original sample's short-sequence items also
+  happened to have few fitted positions, so seq length and position count were correlated in
+  that sample and the wrong one got credited as the driver. See the corrected item-10 read in
+  §4. `v_peak_vs_seq` is still the query going forward, but position count (`n_positions`), not
+  `seq_len`, is the axis that actually matters.
 - **M2 — what is the true internal breakdown of the peak? Still open, and now the priority
   follow-up.** Data: `mx.get_active_memory` / `get_cache_memory` sampled around chain-sweep
   phases. Not collected. Difficulty: medium (coarse split cheap; per-tensor hard). This is
@@ -150,28 +157,46 @@ process still holds ~161GB and remains vulnerable to external memory pressure.
 This is the fifth data point in the same discipline as the four mispredictions above:
 the store — and here, an RSS monitor — measures; we do not predict.
 
-### Item 10 dropped — a single item too big to fit at all (measured 2026-07-12)
+### Item 10 dropped — likely unnecessary; the drop model was wrong (corrected 2026-07-12)
 
-`clear_cache()` fixes the transition-pressure SIGKILL, but it does not change the peak
-DURING a large item's compute — and M1 (above) showed the peak scales with sequence
-length at slope ~1.7GB/token, intercept ~29GB. Extrapolated to item 10 (seq 126), the
-predicted peak is **~245GB**, over the 192GB ceiling. This is a different failure class
-from the transition kill: no amount of freeing the pool between items helps, because the
-process needs ~245GB live during that one item's own compute.
+This is the sixth memory correction in this session's record, in the same discipline as
+the five before it: **measure, don't predict.**
 
-The fix (also a workaround, not a root cause fix): a new `JLENS_MAX_FIT_SEQ` env var
-(jlens commit `073cc04`) that skips any corpus item whose sequence length exceeds the
-cap, advancing the checkpoint past it — the lens then averages over the remaining
-items. `band-n14-fixed` is running with `JLENS_MAX_FIT_SEQ=100`, which drops only item
-10, producing an 11-item lens.
+`clear_cache()` fixes the transition-pressure SIGKILL, but the original item-10 decision
+also leaned on M1's now-corrected seq-length slope (~1.7GB/token, ~29GB intercept). Under
+that model, item 10 (seq 126) extrapolated to ~245GB — over the 192GB ceiling — so it was
+dropped. Under the corrected positions model (§3: ~63GB base + ~2.1GB/fitted-position),
+item 10 has 47 fitted positions — the same count as the measured 161-166GB cluster above
+— so its actual peak was probably **~163GB**, which likely fits under 192GB. **The drop
+was likely unnecessary: a safe-but-probably-wrong call, made under the wrong
+(sequence-length) model.** This is not a vindication of the original decision — dropping
+was reasonable given what was measured at the time, and it did not cost correctness (the
+lens still fit on the remaining 11 items) — but it means the corpus probably could have
+kept all 12.
 
-**Both of tonight's fixes are workarounds, not root fixes.** `mx.clear_cache()` avoids
-the transition SIGKILL; `JLENS_MAX_FIT_SEQ` avoids the single-item OOM by dropping the
-item. Neither explains or reduces the underlying ~1.7GB/token, ~161GB-for-77-tokens
+It also means `JLENS_MAX_FIT_SEQ` (the workaround, jlens commit `073cc04`) guards the
+wrong quantity: it caps SEQUENCE length, but memory tracks fitted POSITIONS. The
+memory-correct lever is the fitted-position count, which for on-policy items is capped by
+`on_policy_max_tokens` (~47 in this corpus). In this corpus the max position count is 56
+(item 11) -> predicted ~181GB by the positions model, still under the 192GB ceiling -> by
+the positions model, **no item in this corpus actually needed dropping**.
+`JLENS_MAX_FIT_SEQ` should be understood as a coarse safety net on a
+correlated-but-not-causal quantity, not the memory-correct control.
+
+Item 11 (56 fitted positions) is a pending empirical test of the corrected model —
+predicted peak ~181GB (63 + 2.1x56) when it runs. Noted here as confirmation still owed,
+not yet observed.
+
+**Both of tonight's original fixes are still workarounds, not root fixes — and one of
+them was tuned against the wrong axis.** `mx.clear_cache()` avoids the transition
+SIGKILL and remains correct. `JLENS_MAX_FIT_SEQ` avoids the single-item OOM by dropping
+items over a sequence-length cap, but that cap is only a proxy for the real driver
+(fitted positions), so it can drop items — like item 10 — that would probably have fit.
+Neither explains or reduces the underlying ~2.1GB/position, ~161GB-at-47-positions
 footprint — that is M2 and M3 above, and they are the deeper fix: M2 (instrument the
 memory, find where it goes) is the prerequisite; M3 (bench `feat/checkpoint` at real
-scale) is the lever that could let long items fit instead of being dropped. Neither is
-done — both are parked as the next session's priority, in that order.
+scale) is the lever that could let high-position items fit instead of being dropped.
+Neither is done — both are parked as the next session's priority, in that order.
 
 ## 5. Build order (free wins first)
 

@@ -66,8 +66,10 @@ disown
 | `JLENS_CHUNK` | 128 | cotangent dim-batch size (saturates ~64; 128 is safe). NOT a memory
 lever (measured 2.8% peak reduction 128->64 on twin items) — speed only. |
 | `JLENS_MAX_FIT_SEQ` | unset (no cap) | skip any corpus item whose sequence length exceeds
-this, advancing the checkpoint past it (the lens averages over the rest). A memory guard for
-items intrinsically too big to fit at all — see §5. |
+this, advancing the checkpoint past it (the lens averages over the rest). A coarse memory
+safety net for items intrinsically too big to fit — but peak scales with fitted POSITIONS,
+not sequence length (see §5); the memory-correct lever is fitted-position count /
+`JLENS_ONPOLICY_TOKENS`. |
 | `JLENS_ONPOLICY_TOKENS` | 48 | tokens generated per on-policy completion. |
 | `JLENS_OUT` | `out/band-<N>L` | run dir (checkpoint + log live here). |
 | `JLENS_ALLOW_DEGENERATE` | unset | set `=1` to override the diversity gate (only after reading the decode). |
@@ -240,14 +242,20 @@ external-pressure situation could loop.
 **A single item is intrinsically too big to fit (still OOMs even with `clear_cache`).**
 Distinct from the transition-pressure SIGKILL above: this is not about freeing the pool
 BETWEEN items, it's that one item's own compute needs more than the machine has. Peak
-scales ~linearly with sequence length (~1.7GB/token, ~29GB intercept — measured on the
-27B band, see `fit_metrics.md` §4), so a long enough item extrapolates past the 192GB
-ceiling regardless of `clear_cache`. Workaround: set `JLENS_MAX_FIT_SEQ` (§1) to skip
-items over the cap — the checkpoint advances past them and the lens averages over what's
-left. This is a workaround, not a fix: it drops data rather than making the item fit.
-The deeper fix (understanding and possibly reducing the per-item peak so long items don't
-need to be dropped) is tracked as M2/M3 in `fit_metrics.md` §3 — not done, parked for a
-future session.
+scales ~linearly with fitted POSITION count, not sequence length (~63GB base + ~2.1GB per
+fitted position — measured on the 27B band, corrected 2026-07-12; the earlier
+~1.7GB/token seq-length slope was a confound, see `fit_metrics.md` §3/§4), so an item with
+enough fitted positions extrapolates past the 192GB ceiling regardless of `clear_cache`.
+Workaround: set `JLENS_MAX_FIT_SEQ` (§1) to skip items over a sequence-length cap — but
+`JLENS_MAX_FIT_SEQ` guards sequence length, which is only correlated with (not the cause
+of) the peak; the memory-correct lever is fitted-position count, capped for on-policy
+items by `JLENS_ONPOLICY_TOKENS`. Treat `JLENS_MAX_FIT_SEQ` as a coarse safety net, not a
+memory-correct control — the checkpoint advances past skipped items and the lens averages
+over what's left. This is a workaround, not a fix: it drops data rather than making the
+item fit, and can drop items unnecessarily since sequence length is an imperfect proxy
+for the real driver. The deeper fix (understanding and possibly reducing the per-position
+peak so items don't need to be dropped) is tracked as M2/M3 in `fit_metrics.md` §3 — not
+done, parked for a future session.
 
 ---
 
