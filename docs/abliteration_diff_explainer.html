@@ -1,0 +1,643 @@
+<title>What abliteration moved — a Jacobian-lens diff</title>
+<style>
+  :root{
+    --ground:#f5f7f8; --panel:#ffffff; --ink:#131a1d; --ink-soft:#47555b;
+    --line:#dbe2e5; --line-strong:#b9c6cc;
+    --teal:#0b7d8f; --teal-bright:#0e9cb3; --teal-wash:#e6f3f5;
+    --indigo:#4f5bd5; --indigo-wash:#ececfb;
+    --amber:#b26a00; --amber-wash:#f8ece0;
+    --green:#2f7a52; --green-wash:#e4f1ea;
+    --red:#c0392b; --red-wash:#f8e6e3;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --shadow:0 1px 2px rgba(19,26,29,.05),0 6px 20px rgba(19,26,29,.06);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#0d1315; --panel:#141d20; --ink:#e8eef0; --ink-soft:#93a4aa;
+      --line:#243237; --line-strong:#33474e;
+      --teal:#3bb6c9; --teal-bright:#5fd0e0; --teal-wash:#0f2b30;
+      --indigo:#8b95f0; --indigo-wash:#1a1e3a;
+      --amber:#e0a05a; --amber-wash:#33240f;
+      --green:#5cc086; --green-wash:#12291d;
+      --red:#e06a5a; --red-wash:#331612;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#f5f7f8; --panel:#ffffff; --ink:#131a1d; --ink-soft:#47555b;
+    --line:#dbe2e5; --line-strong:#b9c6cc; --teal:#0b7d8f; --teal-bright:#0e9cb3;
+    --teal-wash:#e6f3f5; --indigo:#4f5bd5; --indigo-wash:#ececfb; --amber:#b26a00;
+    --amber-wash:#f8ece0; --green:#2f7a52; --green-wash:#e4f1ea;
+    --red:#c0392b; --red-wash:#f8e6e3;
+    --shadow:0 1px 2px rgba(19,26,29,.05),0 6px 20px rgba(19,26,29,.06);
+  }
+  :root[data-theme="dark"]{
+    --ground:#0d1315; --panel:#141d20; --ink:#e8eef0; --ink-soft:#93a4aa;
+    --line:#243237; --line-strong:#33474e; --teal:#3bb6c9; --teal-bright:#5fd0e0;
+    --teal-wash:#0f2b30; --indigo:#8b95f0; --indigo-wash:#1a1e3a; --amber:#e0a05a;
+    --amber-wash:#33240f; --green:#5cc086; --green-wash:#12291d;
+    --red:#e06a5a; --red-wash:#331612;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:900px;margin:0 auto;padding:clamp(20px,5vw,64px) clamp(16px,4vw,32px)}
+  code,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  h1{font-size:clamp(1.9rem,5vw,3rem);line-height:1.05;letter-spacing:-.02em;
+    font-weight:750;margin:.2em 0 .3em;text-wrap:balance}
+  h2{font-size:clamp(1.25rem,3vw,1.6rem);letter-spacing:-.01em;font-weight:700;
+    margin:0;text-wrap:balance}
+  h3{font-size:1.05rem;margin:0 0 4px}
+  p{max-width:66ch}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--teal);font-weight:600}
+  .lede{font-size:1.12rem;color:var(--ink-soft);max-width:64ch}
+  .lede b{color:var(--ink);font-weight:600}
+  header{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:8px}
+  .meta{font-family:var(--mono);font-size:.78rem;color:var(--ink-soft);
+    display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:18px}
+  .meta span{white-space:nowrap}
+  .meta b{color:var(--teal);font-weight:600}
+
+  .stage{margin-top:52px}
+  .stage-head{display:flex;align-items:baseline;gap:14px;margin-bottom:14px}
+  .num{font-family:var(--mono);font-size:.8rem;font-weight:700;color:var(--teal);
+    border:1px solid var(--teal);border-radius:2px;padding:2px 7px;line-height:1;
+    flex:none;translate:0 -2px}
+  .stage p{margin:.5em 0}
+
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:18px 0}
+  .box{background:var(--panel);border:1px solid var(--line-strong);border-radius:6px;
+    padding:12px 14px;box-shadow:var(--shadow);min-width:0}
+  .box .lbl{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--ink-soft);margin-bottom:5px}
+  .box .shape{font-family:var(--mono);font-size:.92rem;font-weight:600;color:var(--ink)}
+  .box .sub{font-size:.82rem;color:var(--ink-soft);margin-top:3px}
+  .box.accent{border-color:var(--teal);background:var(--teal-wash)}
+  .box.accent .shape{color:var(--teal)}
+  .box.indigo{border-color:var(--indigo);background:var(--indigo-wash)}
+  .box.indigo .shape{color:var(--indigo)}
+  .box.amber{border-color:var(--amber);background:var(--amber-wash)}
+  .box.amber .shape{color:var(--amber)}
+  .arrow{font-family:var(--mono);color:var(--line-strong);font-size:1.3rem;
+    flex:none;font-weight:700}
+
+  .note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--teal);
+    border-radius:0 6px 6px 0;padding:14px 16px;margin:18px 0;font-size:.95rem}
+  .note .k{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--teal);font-weight:600;display:block;margin-bottom:4px}
+  .note p{margin:.4em 0}
+  b.hl{background:var(--teal-wash);color:var(--teal);padding:0 4px;border-radius:3px;
+    font-family:var(--mono);font-weight:600;font-size:.92em}
+
+  /* the band strip: one bar per band layer, height=l2, colour=category */
+  .strip-wrap{margin:20px 0 6px}
+  .strip{display:flex;align-items:flex-end;gap:2px;height:190px;
+    border-bottom:1px solid var(--line-strong);padding-bottom:0}
+  .sbar{flex:1 0 auto;min-width:0;border-radius:2px 2px 0 0;position:relative;
+    transition:filter .12s}
+  .sbar:hover{filter:brightness(1.12)}
+  .sbar.safety{background:var(--teal)}
+  .sbar.perm{background:var(--indigo)}
+  .sbar.code{background:var(--amber)}
+  .sbar.noise{background:var(--line-strong)}
+  .sbar.faint{background:var(--teal);opacity:.4}
+  .strip-x{display:flex;gap:2px;margin-top:4px}
+  .strip-x span{flex:1 0 auto;text-align:center;font-family:var(--mono);
+    font-size:.54rem;color:var(--ink-soft)}
+  .strip-key{font-family:var(--mono);font-size:.76rem;color:var(--ink-soft);
+    display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:14px}
+  .strip-key i{font-style:normal;display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:2px;display:inline-block;flex:none}
+
+  /* token read-out cards */
+  .reads{display:grid;grid-template-columns:1fr;gap:14px;margin:20px 0 6px}
+  @media(min-width:640px){.reads{grid-template-columns:1fr 1fr}}
+  .rcard{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:14px 16px;box-shadow:var(--shadow)}
+  .rcard.hero{grid-column:1/-1;border-top:3px solid var(--teal)}
+  .rcard .rl{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+  .rcard .rl b{font-family:var(--mono);font-size:.95rem;color:var(--ink)}
+  .rcard .rl .cat{font-family:var(--mono);font-size:.68rem;letter-spacing:.06em;
+    text-transform:uppercase;font-weight:600;margin-left:auto}
+  .rcard .rl .cat.safety{color:var(--teal)}
+  .rcard .rl .cat.perm{color:var(--indigo)}
+  .rcard .rl .cat.noise{color:var(--ink-soft)}
+  .rcard .rl .l2{font-family:var(--mono);font-size:.72rem;color:var(--ink-soft)}
+  .toks{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0 10px}
+  .tok{font-family:var(--mono);font-size:.8rem;padding:3px 7px;border-radius:4px;
+    border:1px solid var(--line);white-space:nowrap}
+  .tok.up{background:var(--teal-wash);color:var(--teal);border-color:var(--teal)}
+  .tok.dn{background:var(--panel);color:var(--ink-soft)}
+  .dir{font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--ink-soft);font-weight:600;
+    display:flex;align-items:center;gap:6px;margin-bottom:2px}
+  .dir .pm{font-weight:700;font-size:.95rem}
+  .dir.up .pm{color:var(--teal)}
+  .dir.dn .pm{color:var(--red)}
+
+  /* outside-J schematic */
+  .jdiag{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:20px 0 6px}
+  .jseg{flex:1 1 90px;border-radius:6px;padding:12px 12px;text-align:center;
+    display:flex;flex-direction:column;justify-content:center;gap:3px;
+    border:1px solid var(--line-strong)}
+  .jseg .jt{font-family:var(--mono);font-size:.82rem;font-weight:700}
+  .jseg .js{font-size:.72rem;color:var(--ink-soft)}
+  .jseg.inj{background:var(--teal-wash);border-color:var(--teal)}
+  .jseg.inj .jt{color:var(--teal)}
+  .jseg.outj{background:var(--red-wash);border-color:var(--red)}
+  .jseg.outj .jt{color:var(--red)}
+  .jbrace{display:flex;gap:8px;margin-top:6px;font-family:var(--mono);
+    font-size:.74rem;color:var(--ink-soft)}
+  .jbrace .a{flex:1 1 0}
+  .jbrace .a.inj{color:var(--teal)}
+  .jbrace .a.outj{color:var(--red)}
+
+  /* two-run agreement */
+  .agree{margin:18px 0 6px}
+  .arow{display:grid;grid-template-columns:44px 1fr;gap:10px;align-items:center;
+    margin-bottom:6px}
+  .arow .al{font-family:var(--mono);font-size:.78rem;color:var(--ink-soft);text-align:right}
+  .apair{display:flex;flex-direction:column;gap:2px}
+  .abar{height:9px;border-radius:2px;position:relative;background:var(--line)}
+  .abar > i{position:absolute;left:0;top:0;bottom:0;border-radius:2px}
+  .abar.stock > i{background:var(--teal)}
+  .abar.heretic > i{background:var(--indigo)}
+
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);
+    font-size:.86rem;color:var(--ink-soft)}
+  footer .mono{color:var(--ink)}
+  strong{font-weight:600}
+  em{font-style:italic}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">jlens-mlx · abliteration diff · own-fit band lenses</div>
+    <h1>What abliteration moved</h1>
+    <p class="lede">We fit two Jacobian lenses on the <b>same corpus</b> — one on stock
+      Qwen3.5-27B, one on its abliterated (<span class="mono">heretic</span>) twin — then
+      subtracted them. The diff <b>recovers the edit</b>: it localises where abliteration changed the
+      <b>transport</b> (the residual-writing matrices, §05) and reads out its direction — a
+      safety/refusal signature in the mid-to-late band. The edit is a static directional weight change,
+      so its <b>magnitude is prompt-independent</b> (same size on any input) — but because a fixed
+      direction is read through prompt-dependent residuals, its <b>token-space content is
+      prompt-conditional</b>: safety vocab on safety prompts, formatting noise on a benign one (§04).
+      A modest, honest result: the lens sees <em>what</em> abliteration did and <em>where</em>.</p>
+    <div class="note" style="border-left-color:var(--green);margin-top:1em"><span class="k" style="color:var(--green)">clean matched-pair update · 2026-07-14</span>
+      The body below uses the ORIGINAL pair (mlx-community stock vs the <b>coder3101</b> abliteration —
+      two variables at once: third-party converter <i>and</i> recipe). We since built a <b>clean pair</b>
+      (self-converted base + our own controlled abliteration, both via the identical mlx-vlm 0.6.5, so the
+      only variable is the abliteration) and re-ran per-prompt. It <b>reverses the old "benign floor
+      falsified"</b>: magnitude is flat across prompts (mean l2 L32–42: benign 452 ≈ safety 457–460), but
+      the benign recipe's top tokens are pure formatting (<code>**</code>, <code>Nothing</code>) while
+      safety prompts surface <code>安全风险</code>/<code>Safety</code>/<code>不承担任何</code>. The content
+      floor <b>holds</b>. See §04.</div>
+    <div class="meta">
+      <span>model <b>Qwen3.5-27B</b> (8-bit)</span>
+      <span>band <b>16–47</b> · target <b>63</b> · d_model <b>5120</b></span>
+      <span>orig A/B = <b>band-n14-stock / -fixed</b></span>
+      <span>clean A/B = <b>pair-base / pair-heretic-t144</b></span>
+      <span>same corpus · <b>11 items</b> each</span>
+    </div>
+  </header>
+
+  <!-- STAGE 1 -->
+  <section class="stage">
+    <div class="stage-head"><span class="num">01</span><h2>Two lenses, one shared substrate — vary only the map</h2></div>
+    <p>A lens is just a linear map <code>J_l</code> per band layer. To turn it into token
+      read-outs you apply it to real residual activations — and those come from running
+      <em>a</em> model. That model is the <b>substrate</b>. The trick of the diff: hold the
+      substrate <b>fixed and identical</b> for both lenses, so their read-outs can only differ
+      by the <b>transport geometry</b> each lens learned. Same activations in; different map.</p>
+    <div class="flow">
+      <div class="box"><div class="lbl">substrate (shared)</div><div class="shape">one model's residuals</div><div class="sub">held-out prompts, fixed</div></div>
+      <span class="arrow">&rarr;</span>
+      <div class="box accent"><div class="lbl">lens A · stock</div><div class="shape">J<sup>A</sup> · read-out A</div></div>
+      <div class="box indigo"><div class="lbl">lens B · abliterated</div><div class="shape">J<sup>B</sup> · read-out B</div></div>
+      <span class="arrow">&rarr;</span>
+      <div class="box amber"><div class="lbl">the finding</div><div class="shape">B − A</div><div class="sub">per-layer, per-token</div></div>
+    </div>
+    <div class="note"><span class="k">why the corpus is shared too</span>
+      Both lenses were fit on the <b>same token sequences</b> (item 10 dropped in both). So the
+      only thing that differs between A and B is the model that produced the transport — not the
+      data it saw, not the substrate it's read on. Cleanest possible one-variable comparison.</div>
+  </section>
+
+  <!-- STAGE 2 -->
+  <section class="stage">
+    <div class="stage-head"><span class="num">02</span><h2>What each layer read differently — B − A across the band</h2></div>
+    <p>Bar height is <code>l2</code> — how much the two lenses <em>disagree</em> at that layer,
+      pooled over 1984 (prompt × position) read-outs. Colour is what abliteration <b>surfaced
+      more</b> (<code>top_up</code>) there. The honest tell: the <b>tallest</b> bars are the early
+      band (24–29), and they're <b class="hl">noise</b> — illegible <code>*</code>-prefix subword
+      junk, the band that isn't interpretable yet. The <b>signal</b> is the coherent teal cluster
+      from <b class="hl">L32–L42</b>: safety and refusal, every layer, mid-height but unmistakable.</p>
+    <div class="strip-wrap">
+      <div class="strip" id="strip" role="img" aria-label="Per-layer disagreement (l2) across band layers 16 to 47. Early layers 24-29 are tallest but are noise; layers 32-42 form a coherent safety/refusal cluster in teal."></div>
+      <div class="strip-x" id="stripx"></div>
+    </div>
+    <div class="strip-key">
+      <i><span class="sw" style="background:var(--teal)"></span>safety / refusal surfaced</i>
+      <i><span class="sw" style="background:var(--indigo)"></span>permission ("can / 可以")</i>
+      <i><span class="sw" style="background:var(--amber)"></span>code-ish tokens</i>
+      <i><span class="sw" style="background:var(--line-strong)"></span>noise (illegible early band)</i>
+    </div>
+    <div class="note" style="border-left-color:var(--amber)"><span class="k" style="color:var(--amber)">read the shape, not the peak</span>
+      Raw <code>l2</code> peaks at <b>621</b> (L27, pure <code>*</code>-junk). The safety layers sit
+      at <b>486–575</b> — lower magnitude, but they line up into a block and speak plain English
+      (and Chinese, and Russian). Magnitude ranks the noise on top; coherence is the real signal.
+      Same lesson as the legibility metric: the number misleads, the read-out doesn't.</div>
+  </section>
+
+  <!-- STAGE 3 -->
+  <section class="stage">
+    <div class="stage-head"><span class="num">03</span><h2>The actual tokens — real read-outs from our lenses</h2></div>
+    <p>Straight from <code>out/diff_ablit_vs_stock.txt</code> (stock substrate). <span class="tok up" style="padding:1px 5px">+ surfaced by abliteration</span>
+      is <code>top_up</code>; <span class="tok dn" style="padding:1px 5px">− suppressed</span> is <code>top_down</code>. This is what
+      you'll see scroll past when you run <code>diff_lenses.py</code> yourself.</p>
+    <div class="reads">
+      <div class="rcard hero">
+        <div class="rl"><b>L40</b> <span class="l2">l2 = 544</span><span class="cat safety">deep safety</span></div>
+        <div class="dir up"><span class="pm">+</span> abliteration surfaces</div>
+        <div class="toks">
+          <span class="tok up">&nbsp;safety</span><span class="tok up">Safety</span><span class="tok up">&nbsp;Safety</span><span class="tok up">安全教育</span><span class="tok up">Cannot</span><span class="tok up">&nbsp;безопасность</span><span class="tok up">安全工作</span><span class="tok up">是不可</span>
+        </div>
+        <div class="dir dn"><span class="pm">−</span> abliteration suppresses</div>
+        <div class="toks">
+          <span class="tok dn">查看评论</span><span class="tok dn">&nbsp;-fetch</span><span class="tok dn">&nbsp;Passage</span><span class="tok dn">&nbsp;Establishment</span><span class="tok dn">下载报告</span><span class="tok dn">免费订阅</span><span class="tok dn">登录后查看</span>
+        </div>
+        <p style="font-size:.82rem;color:var(--ink-soft);margin:0">安全教育 = "safety education", 安全工作 = "safety work",
+          безопасность = "security" (Russian), 是不可 = "is not / cannot". Cross-lingual, same axis.</p>
+      </div>
+      <div class="rcard">
+        <div class="rl"><b>L34</b> <span class="l2">l2 = 525</span><span class="cat safety">safety</span></div>
+        <div class="dir up"><span class="pm">+</span></div>
+        <div class="toks">
+          <span class="tok up">安全风险</span><span class="tok up">&nbsp;unsafe</span><span class="tok up">&nbsp;unethical</span><span class="tok up">&nbsp;dangerous</span><span class="tok up">安全隐患</span><span class="tok up">不安全</span><span class="tok up">安全问题</span>
+        </div>
+        <div class="dir dn"><span class="pm">−</span></div>
+        <div class="toks">
+          <span class="tok dn">cn</span><span class="tok dn">握手</span><span class="tok dn">访</span><span class="tok dn">_declaration</span>
+        </div>
+      </div>
+      <div class="rcard">
+        <div class="rl"><b>L37</b> <span class="l2">l2 = 508</span><span class="cat safety">refusal words</span></div>
+        <div class="dir up"><span class="pm">+</span></div>
+        <div class="toks">
+          <span class="tok up">Impossible</span><span class="tok up">Nothing</span><span class="tok up">&nbsp;nothing</span><span class="tok up">Violation</span><span class="tok up">&nbsp;violations</span><span class="tok up">&nbsp;safety</span><span class="tok up">安全知识</span>
+        </div>
+        <div class="dir dn"><span class="pm">−</span></div>
+        <div class="toks">
+          <span class="tok dn">&nbsp;viewing</span><span class="tok dn">查看</span><span class="tok dn">游玩</span><span class="tok dn">你是谁</span>
+        </div>
+      </div>
+      <div class="rcard">
+        <div class="rl"><b>L16</b> <span class="l2">l2 = 582</span><span class="cat perm">permission</span></div>
+        <div class="dir up"><span class="pm">+</span></div>
+        <div class="toks">
+          <span class="tok up">can</span><span class="tok up">&nbsp;Can</span><span class="tok up">.can</span><span class="tok up">Can</span><span class="tok up">可以</span><span class="tok up">可以更</span>
+        </div>
+        <div class="dir dn"><span class="pm">−</span></div>
+        <div class="toks">
+          <span class="tok dn">&nbsp;(*</span><span class="tok dn">天下</span><span class="tok dn">国家规定</span>
+        </div>
+        <p style="font-size:.82rem;color:var(--ink-soft);margin:0">可以 = "can / may". The one early-band
+          layer with a legible signal — modal permission, the mirror image of the deep refusal band.</p>
+      </div>
+      <div class="rcard">
+        <div class="rl"><b>L24</b> <span class="l2">l2 = 542</span><span class="cat noise">geography down</span></div>
+        <div class="dir up"><span class="pm">+</span> <span style="font-weight:400;text-transform:none;letter-spacing:0">(noise)</span></div>
+        <div class="toks">
+          <span class="tok dn">*S</span><span class="tok dn">*M</span><span class="tok dn">*T</span><span class="tok dn">*A</span>
+        </div>
+        <div class="dir dn"><span class="pm">−</span> the coherent half</div>
+        <div class="toks">
+          <span class="tok dn" style="border-color:var(--red);color:var(--red)">&nbsp;China</span><span class="tok dn" style="border-color:var(--red);color:var(--red)">&nbsp;Greece</span><span class="tok dn" style="border-color:var(--red);color:var(--red)">&nbsp;Italy</span><span class="tok dn" style="border-color:var(--red);color:var(--red)">&nbsp;Austria</span><span class="tok dn" style="border-color:var(--red);color:var(--red)">&nbsp;Egypt</span><span class="tok dn" style="border-color:var(--red);color:var(--red)">&nbsp;Spain</span>
+        </div>
+        <p style="font-size:.82rem;color:var(--ink-soft);margin:0">The complementary story: across L24–L36
+          the <b>suppressed</b> side is geography/nationality (China + Europe) and retrieval verbs
+          (查看 = "view", fetch). Worth a second look; the safety axis is the load-bearing one.</p>
+      </div>
+      <div class="rcard">
+        <div class="rl"><b>L27</b> <span class="l2">l2 = 621</span><span class="cat noise">pure noise</span></div>
+        <div class="dir up"><span class="pm">+</span></div>
+        <div class="toks">
+          <span class="tok dn">*B</span><span class="tok dn">*S</span><span class="tok dn">(*</span><span class="tok dn">*T</span><span class="tok dn">*M</span><span class="tok dn">*C</span>
+        </div>
+        <p style="font-size:.82rem;color:var(--ink-soft);margin:0">Tallest bar in the band (l2 = 621),
+          zero meaning. This is why you judge the read-out, never the magnitude — the biggest number
+          on the chart is subword sludge.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- STAGE 4 -->
+  <section class="stage">
+    <div class="stage-head"><span class="num">04</span><h2>Why <em>more</em> safety, not less — abliteration edits the <em>transport</em>, not the read-out</h2></div>
+    <p>The naive guess: abliteration removes refusal, so <code>B − A</code> should show
+      <em>less</em> safety. It shows the opposite — and the weight footprint (§05) says exactly
+      where and how. Heretic performs <b>directional ablation</b>: it orthogonalises the
+      residual-<em>writing</em> matrices — every layer's <code>attn.o_proj</code> and
+      <code>mlp.down_proj</code> — against the refusal direction <code>r = mean(harmful) −
+      mean(harmless)</code>. Those matrices are the <b>tail blocks</b>, which sit <b>inside</b>
+      <code>J</code>. The read-out (norm, head, softcap) it leaves <b>untouched</b>:
+      <code>model.norm</code> is <b class="hl">bit-identical</b> between the two models,
+      <code>lm_head</code> and <code>embed</code> at the quant-noise floor.</p>
+    <div class="jdiag">
+      <div class="jseg inj"><div class="jt">band layer l</div><div class="js">residual in</div></div>
+      <span class="arrow" style="align-self:center">&rarr;</span>
+      <div class="jseg outj"><div class="jt">tail blocks · o_proj + down_proj</div><div class="js">EDITED — the transport</div></div>
+      <span class="arrow" style="align-self:center">&rarr;</span>
+      <div class="jseg inj"><div class="jt">norm · head · softcap</div><div class="js">SHARED — read-out untouched</div></div>
+      <span class="arrow" style="align-self:center">&rarr;</span>
+      <div class="jseg inj"><div class="jt">logits</div><div class="js">refuse / comply</div></div>
+    </div>
+    <div class="jbrace">
+      <span class="a outj">└─ inside J — abliteration edits this (transport) ─┘</span>
+      <span class="a inj">└─ outside J — bit-identical (read-out) ─┘</span>
+    </div>
+    <p>So the edit is <em>inside</em> the map, and the read-out is held fixed — which is precisely
+      why the lens is the right instrument: the diff <code>B − A</code> is a <b>pure transport
+      difference</b>, uncontaminated by any read-out change. What it reads out is the <b>direction of
+      the weight edit itself</b>: abliteration removed the refusal-<em>behaviour</em> axis
+      (harmful-vs-harmless means) from <code>o_proj</code>/<code>down_proj</code>, and that removal
+      has a fixed signature in vocabulary space — safety/refusal tokens. The edit's <b>magnitude</b> is
+      the same on any input (it's a static weight change); what the lens <b>reads out in token space</b>
+      depends on the prompt, because the fixed direction is projected through prompt-dependent residuals.</p>
+    <div class="note" style="border-left-color:var(--green)"><span class="k" style="color:var(--green)">clean-pair test (2026-07-14): magnitude flat, content prompt-conditional — floor HOLDS</span>
+      The per-prompt run on the <b>clean matched pair</b> (`pair-base` vs `pair-heretic-t144`) splits the
+      question in two. <b>Magnitude</b> is prompt-independent: mean l2 over L32–42 is essentially flat —
+      benign recipe <b>452</b>, safety:lock <b>457</b>, safety:chemicals <b>460</b> (a ~1% margin). But
+      <b>content</b> is prompt-conditional: at L34 the safety prompts surface pure safety vocab
+      (<code>安全风险</code> <code>Safety</code> <code>安全性</code> <code>不承担任何</code>) while the
+      benign recipe surfaces pure <b>formatting</b> (<code>**</code> <code>Nothing</code>) — and a
+      benign-but-security-adjacent prompt (crypto history) leaks a little safety vocab at rank 6–8. So
+      there <b>is</b> a content floor: a truly benign prompt does not surface safety words.
+      <br><br><span style="color:var(--ink-soft)">This <b>reverses</b> the older amber note (below), which
+      ran on the uncontrolled pair (mlx-community stock vs coder3101, differing in converter <i>and</i>
+      recipe) and read benign-lights-up as "no floor." That l2-only reading conflated magnitude with
+      content; on a controlled pair the two separate cleanly.</span></div>
+    <div class="note" style="border-left-color:var(--amber)"><span class="k" style="color:var(--amber)">superseded — original-pair note (2026-07-13)</span>
+      On the original pair a benign "weeknight recipe" prompt lit up L32–42 as strongly as the safety
+      prompts (mean l2 596 vs ~524–571) and surfaced <code>Nothing</code>/<code>cannot</code>/<code>unsafe</code>,
+      read at the time as "no benign floor, uniform across content." Kept for the record; the clean-pair
+      test above is the corrected version.</div>
+    <div class="note"><span class="k">what the tokens still tell us</span>
+      The surfaced tokens — <code>unethical</code>, <code>illegal</code>, <code>harmful</code>,
+      <code>violat…</code> — are almost verbatim Heretic's own <b>refusal-keyword list</b>, the words it
+      optimises the model to stop emitting. So the diff correctly <b>characterises what abliteration
+      changed</b> (a refusal-direction edit) and <b>where</b> (§05, same layers as the weight edit) —
+      it just doesn't imply a content-conditional disposition.</div>
+  </section>
+
+  <!-- STAGE 5 -->
+  <section class="stage">
+    <div class="stage-head"><span class="num">05</span><h2>The weight footprint — an independent second measurement, and it agrees</h2></div>
+    <p>Everything above reads the <em>transport</em> (the Jacobian). Here's a completely independent
+      view: dequantise both 8-bit models and take the relative weight delta
+      <code>‖W<sub>B</sub> − W<sub>A</sub>‖ / ‖W<sub>A</sub>‖</code> per layer. This measures
+      <em>where abliteration changed the weights</em> — no lens involved. If it peaks where the
+      transport diff peaks, two independent methods agree on where abliteration lives.</p>
+    <div class="strip-wrap">
+      <div class="strip" id="fstrip" role="img" aria-label="Per-layer relative weight delta across all 64 layers. Flat near zero for layers 0-13, ramps up, plateaus across 25-50, peaks at layer 33 and 36. The lens band 16-47 and the transport safety cluster 32-42 are marked."></div>
+      <div class="strip-x" id="fstripx"></div>
+    </div>
+    <div class="strip-key">
+      <i><span class="sw" style="background:var(--amber)"></span>weight delta per layer (all 64)</i>
+      <i><span class="sw" style="background:var(--teal);opacity:.5"></span>lens band 16–47</i>
+      <i><span class="sw" style="outline:2px solid var(--teal);outline-offset:1px;background:transparent"></span>transport safety cluster 32–42</i>
+    </div>
+    <div class="note"><span class="k">the cross-validation</span>
+      The weight edit peaks at <b class="hl">L33 (0.039)</b> and <b class="hl">L36 (0.034)</b> and
+      plateaus L25–50 — and the transport-diff safety cluster (§02) peaks at the same L33–37, spanning
+      L32–42. Two measurements that share no machinery — weight-space edit magnitude vs transport-space
+      read-out shift — land on the <b>same layers</b>. That co-localisation is what turns "suggestive"
+      into "mechanistic".</div>
+    <p style="margin-top:22px">And <em>which</em> matrices? The edit is ~6× concentrated in the three
+      residual-<b>writing</b> projections, exactly as directional ablation prescribes — the input
+      matrices (q/k/v, gate, up) sit at the quant floor:</p>
+    <div class="agree" id="proj"></div>
+    <div class="strip-key">
+      <i><span class="sw" style="background:var(--red)"></span>residual-writing (o_proj / down_proj)</i>
+      <i><span class="sw" style="background:var(--line-strong)"></span>input matrices (floor)</i>
+    </div>
+    <div class="note" style="border-left-color:var(--green)"><span class="k" style="color:var(--green)">confirmed against the Heretic source</span>
+      This isn't inferred — Heretic's code orthogonalises exactly <code>attn.o_proj</code> +
+      <code>mlp.down_proj</code> (skipping embed/head), on a per-layer <b>tent schedule</b>
+      (<code>max_weight</code> at <code>max_weight_position</code>, ramping to zero past
+      <code>min_weight_distance</code>). The footprint above <em>is</em> that tent, imaged from the
+      weights: flat → ramp → plateau/peak L33–36 → taper. And the vision tower is
+      <b class="hl">bit-identical</b> (max |B−A| = 0) — abliteration never touched it.</div>
+  </section>
+
+  <!-- STAGE 6 -->
+  <section class="stage">
+    <div class="stage-head"><span class="num">06</span><h2>It isn't a substrate artifact — both directions agree</h2></div>
+    <p>Which model's residuals you feed as the substrate is a free choice, and it could bias the
+      result — so I ran it <b>both ways</b>: once reading on the stock model's activations, once on
+      the abliterated model's. If the finding flipped, it'd be an artifact of the input. It didn't
+      — the safety cluster comes out layer-for-layer identical. The <code>l2</code> per layer,
+      L32–L42, stock (teal) vs heretic (indigo) substrate:</p>
+    <div class="agree" id="agree"></div>
+    <div class="strip-key">
+      <i><span class="sw" style="background:var(--teal)"></span>stock substrate</i>
+      <i><span class="sw" style="background:var(--indigo)"></span>heretic substrate</i>
+    </div>
+    <div class="note"><span class="k">what agreement buys you</span>
+      Because both substrates give the same answer, the finding is a property of the <b>lens pair</b>
+      — the difference in transport geometry — not of whose activations happened to be the input.
+      That's the check the diff script explicitly asks for, and it passed.</div>
+  </section>
+
+  <!-- STAGE 7 -->
+  <section class="stage">
+    <div class="stage-head"><span class="num">07</span><h2>What it does — and does <em>not</em> — establish</h2></div>
+    <p>One limit that flipped once we controlled the pair, and two still open. The finding this leaves
+      standing is solid: the diff <b>recovers</b> abliteration's edit — its location (§05) and its
+      vocabulary-space direction. The edit's magnitude is prompt-independent; its token-space content is
+      prompt-conditional (§04).</p>
+    <div class="reads">
+      <div class="rcard" style="border-top:3px solid var(--green)">
+        <h3>Content floor — HOLDS on the clean pair</h3>
+        <p style="font-size:.9rem;color:var(--ink-soft);margin:.3em 0 0">On the uncontrolled pair a
+          per-prompt run read "no benign floor" (benign recipe l2 596 ≈ safety, surfacing refusal vocab).
+          The <b>clean matched pair reverses it</b>: l2 magnitude is flat across prompts (benign 452 ≈
+          safety 457–460), but the benign recipe's top tokens are pure formatting while safety prompts
+          surface safety vocab. Magnitude prompt-independent, content prompt-conditional — the floor is
+          real (§04). The old falsification confounded converter + recipe.</p>
+      </div>
+      <div class="rcard" style="border-top:3px solid var(--amber)">
+        <h3>Quant match unconfirmed</h3>
+        <p style="font-size:.9rem;color:var(--ink-soft);margin:.3em 0 0">Both are 8-bit but possibly
+          different converter versions. The illegible early-band <code>*</code>-junk / CJK sludge is
+          plausibly quant noise. The mid-late safety cluster is too coherent and too consistent across
+          both substrates to be quant noise — so the headline survives — but discount early-band
+          magnitude accordingly.</p>
+      </div>
+      <div class="rcard" style="border-top:3px solid var(--teal)">
+        <h3>By eye, not by score</h3>
+        <p style="font-size:.9rem;color:var(--ink-soft);margin:.3em 0 0">This finding rests entirely on
+          the read-out tokens. The per-layer legibility metric misleads (established on
+          band-n14-fixed: it ranked degenerate deep layers 0.91–0.93 over the meaningful L40 at 0.85).
+          A genuinely disposition-aware metric is still open.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- STAGE 8 -->
+  <section class="stage">
+    <div class="stage-head"><span class="num">08</span><h2>Reproduce it — CLI now, heylook later</h2></div>
+    <p>Everything above came from two commands. Both are Metal-gated (stop the server first) and must
+      run unsandboxed. When the heylook <code>jspace</code> page lands, this is the exact pipeline it
+      wraps — the lens dirs and read-out semantics are identical, so a CLI run and a UI run line up
+      one-to-one.</p>
+    <div class="note"><span class="k">1 · fit the stock counterpart on the same corpus</span>
+      <code>JLENS_MODEL=…/Qwen3.5-27B-8bit-mlx JLENS_OUT=out/band-n14-stock \</code><br>
+      <code>&nbsp;&nbsp;JLENS_LAYERS=16,…,47 JLENS_N=14 ./scripts/fit_band_supervisor.sh</code>
+      <p style="margin:.5em 0 0">Copy <code>band-n14-fixed/ckpt/corpus.json</code> into the stock
+        <code>ckpt/</code> first — the fit reuses those token ids instead of regenerating, so the
+        corpus is identical. It resumes, skips generation, and finishes clean
+        (<code>identity_ok: true</code>).</p>
+    </div>
+    <div class="note"><span class="k">2 · diff the two lenses on a shared substrate</span>
+      <code>JLENS_MODEL=…/Qwen3.5-27B-8bit-mlx \</code><br>
+      <code>&nbsp;&nbsp;JLENS_LENS_A=out/band-n14-stock JLENS_LENS_B=out/band-n14-fixed \</code><br>
+      <code>&nbsp;&nbsp;JLENS_TOPK=10 uv run python scripts/diff_lenses.py</code>
+      <p style="margin:.5em 0 0">Swap <code>JLENS_MODEL</code> to the <code>-heretic-</code> path to
+        run the other substrate direction. A = stock, B = abliterated; <code>top_up</code> = what B
+        surfaces more, <code>top_down</code> = what B suppresses.</p>
+    </div>
+    <div class="note" style="border-left-color:var(--green)"><span class="k" style="color:var(--green)">what to look for when you run it</span>
+      <p style="margin:0">Ignore the tallest early-band bars — they're <code>*</code>-junk. Scroll to
+        <b>L32–L42</b>: if <code>top_up</code> there reads <code>Safety / unsafe / 安全风险 / Cannot /
+        violations</code>, you're seeing the same transport-level refusal signal we did. The benign
+        prompt's rows should be near-flat; the safety-adjacent prompts carry the delta. That alignment
+        — CLI read-out ↔ what the model won't say — is the whole point of the lens.</p>
+    </div>
+  </section>
+
+  <footer>
+    <strong>What abliteration moved</strong> · jlens-mlx diff-of-Jacobians on Qwen3.5-27B (8-bit),
+    stock vs <span class="mono">heretic</span>, band 16–47, same 11-item corpus. Token read-outs are
+    verbatim from <span class="mono">out/diff_ablit_vs_stock.txt</span> and
+    <span class="mono">…_hereticsub.txt</span>; l2 values are the pooled per-layer disagreement over
+    1984 (prompt × position) reads. Finding written up in
+    <span class="mono">out/diff_ablit_vs_stock_FINDING.md</span>.
+  </footer>
+</div>
+
+<script>
+  // Per band layer 16..47: [layer, l2 (stock substrate), category]. Real values from
+  // out/diff_ablit_vs_stock.txt. Category = what top_up surfaces at that layer.
+  var BAND = [
+    [16,581.65,'perm'],[17,554.27,'noise'],[18,567.63,'perm'],[19,533.71,'noise'],
+    [20,551.84,'code'],[21,572.04,'code'],[22,547.02,'code'],[23,529.56,'noise'],
+    [24,541.68,'noise'],[25,598.76,'noise'],[26,613.45,'noise'],[27,621.25,'noise'],
+    [28,597.33,'noise'],[29,579.39,'noise'],[30,539.80,'noise'],[31,522.53,'noise'],
+    [32,575.25,'safety'],[33,491.22,'safety'],[34,525.05,'safety'],[35,545.46,'safety'],
+    [36,530.63,'safety'],[37,507.76,'safety'],[38,488.45,'safety'],[39,536.93,'safety'],
+    [40,544.38,'safety'],[41,486.53,'safety'],[42,507.96,'safety'],[43,435.82,'faint'],
+    [44,415.48,'faint'],[45,320.14,'faint'],[46,272.60,'faint'],[47,246.48,'faint']
+  ];
+  (function(){
+    var strip=document.getElementById('strip'), xs=document.getElementById('stripx');
+    if(!strip) return;
+    var mx=0; BAND.forEach(function(b){ if(b[1]>mx) mx=b[1]; });
+    BAND.forEach(function(b){
+      var bar=document.createElement('div');
+      bar.className='sbar '+b[2];
+      bar.style.height=Math.round(b[1]/mx*100)+'%';
+      bar.title='L'+b[0]+'  l2='+b[1].toFixed(0)+'  ('+b[2]+')';
+      strip.appendChild(bar);
+      var lab=document.createElement('span');
+      lab.textContent=(b[0]%4===0||b[0]===47)?b[0]:'';
+      xs.appendChild(lab);
+    });
+  })();
+
+  // Two-run agreement: l2 per layer L32..L42, stock vs heretic substrate. Real values.
+  var AGREE = [
+    [32,575.25,581.78],[33,491.22,480.12],[34,525.05,510.71],[35,545.46,529.52],
+    [36,530.63,531.41],[37,507.76,505.06],[38,488.45,498.58],[39,536.93,556.06],
+    [40,544.38,560.04],[41,486.53,492.26],[42,507.96,509.79]
+  ];
+  (function(){
+    var host=document.getElementById('agree');
+    if(!host) return;
+    var mx=0; AGREE.forEach(function(a){ mx=Math.max(mx,a[1],a[2]); });
+    AGREE.forEach(function(a){
+      var row=document.createElement('div'); row.className='arow';
+      var lab=document.createElement('div'); lab.className='al'; lab.textContent='L'+a[0];
+      var pair=document.createElement('div'); pair.className='apair';
+      var b1=document.createElement('div'); b1.className='abar stock';
+      var i1=document.createElement('i'); i1.style.width=Math.round(a[1]/mx*100)+'%'; b1.appendChild(i1);
+      var b2=document.createElement('div'); b2.className='abar heretic';
+      var i2=document.createElement('i'); i2.style.width=Math.round(a[2]/mx*100)+'%'; b2.appendChild(i2);
+      pair.appendChild(b1); pair.appendChild(b2);
+      row.appendChild(lab); row.appendChild(pair); host.appendChild(row);
+    });
+  })();
+
+  // Weight footprint: relative delta ||W_B - W_A|| / ||W_A|| per layer, all 64.
+  // Real values from out/abliteration_footprint.txt. Peaks L33/L36; plateau L25-50.
+  var FP = [
+    0.00237,0.00249,0.00250,0.00271,0.00241,0.00298,0.00251,0.00251,0.00230,0.00277,
+    0.00271,0.00296,0.00296,0.00327,0.00664,0.00823,0.00892,0.00886,0.00790,0.00892,
+    0.00911,0.00994,0.00744,0.01006,0.01165,0.02663,0.02588,0.02760,0.02849,0.02493,
+    0.02417,0.02326,0.02896,0.03867,0.02567,0.02853,0.03416,0.02851,0.02749,0.02401,
+    0.02358,0.02582,0.02595,0.02787,0.02746,0.02571,0.02288,0.02669,0.02655,0.02637,
+    0.02344,0.01936,0.01938,0.01874,0.01914,0.01808,0.01799,0.01818,0.01735,0.01449,
+    0.01539,0.01562,0.01464,0.01415
+  ];
+  (function(){
+    var strip=document.getElementById('fstrip'), xs=document.getElementById('fstripx');
+    if(!strip) return;
+    var mx=Math.max.apply(null,FP);
+    FP.forEach(function(v,L){
+      var bar=document.createElement('div');
+      var inBand=(L>=16&&L<=47), inCluster=(L>=32&&L<=42);
+      bar.className='sbar';
+      bar.style.background='var(--amber)';
+      bar.style.height=Math.round(v/mx*100)+'%';
+      // shade the lens band; outline the transport safety cluster
+      if(inBand) bar.style.opacity='1'; else bar.style.opacity='.5';
+      if(inCluster){ bar.style.outline='2px solid var(--teal)'; bar.style.outlineOffset='1px'; }
+      bar.title='L'+L+'  weight delta='+v.toFixed(4)+(L===33||L===36?'  (peak)':'');
+      strip.appendChild(bar);
+      var lab=document.createElement('span');
+      lab.textContent=(L%8===0||L===63||L===33)?L:'';
+      xs.appendChild(lab);
+    });
+  })();
+
+  // Projection-type mean relative delta -- residual-writing vs input matrices.
+  var PROJ = [
+    ['mlp.down_proj',0.02637,'w'],['self_attn.o_proj',0.02406,'w'],['linear_attn.out_proj',0.02259,'w'],
+    ['self_attn.q_proj',0.00457,'i'],['mlp.up_proj',0.00449,'i'],['linear_attn.in_proj_qkv',0.00395,'i'],
+    ['mlp.gate_proj',0.00373,'i'],['self_attn.k_proj',0.00359,'i']
+  ];
+  (function(){
+    var host=document.getElementById('proj');
+    if(!host) return;
+    var mx=Math.max.apply(null,PROJ.map(function(p){return p[1];}));
+    PROJ.forEach(function(p){
+      var row=document.createElement('div'); row.className='arow';
+      var lab=document.createElement('div'); lab.className='al';
+      lab.style.fontSize='.68rem'; lab.textContent=p[0];
+      var pair=document.createElement('div'); pair.className='apair';
+      var b=document.createElement('div'); b.className='abar';
+      var i=document.createElement('i');
+      i.style.width=Math.round(p[1]/mx*100)+'%';
+      i.style.background=(p[2]==='w')?'var(--red)':'var(--line-strong)';
+      b.appendChild(i);
+      var val=document.createElement('div');
+      val.style.cssText='font-family:var(--mono);font-size:.66rem;color:var(--ink-soft);margin-top:1px';
+      val.textContent=p[1].toFixed(4);
+      pair.appendChild(b); pair.appendChild(val);
+      row.appendChild(lab); row.appendChild(pair); host.appendChild(row);
+    });
+  })();
+</script>
