@@ -48,8 +48,8 @@ the old pair, tracking the deep tent:
 
 **Headline (corrected, unified):** abliteration installs a **static directional transport edit**
 whose **magnitude is prompt-independent** (fixed weight edit) but whose **token-space content is
-prompt-conditional** — because a fixed direction read through prompt-dependent residuals surfaces
-different tokens. It surfaces safety vocabulary precisely on safety prompts, formatting noise on a
+prompt-conditional** — because the fixed (per-layer) directions read through prompt-dependent residuals
+surface different tokens. It surfaces safety vocabulary precisely on safety prompts, formatting noise on a
 truly benign prompt, and partial leakage on a benign-but-topic-adjacent prompt. **This reverses the
 old "benign floor falsified":** on a properly controlled pair the content floor HOLDS. The earlier
 falsification confounded converter + recipe and does not generalize.
@@ -109,7 +109,12 @@ CORRECTED 2026-07-13 (the weight footprint below, plus reading the Heretic sourc
 overturned an earlier tidy-but-wrong framing). Abliteration edits the **transport**,
 NOT the readout. Heretic performs directional ablation: it orthogonalizes the
 residual-**writing** matrices — every layer's `attn.o_proj` and `mlp.down_proj` — against
-the refusal direction `r = mean(harmful) - mean(harmless)`. Those matrices are the tail
+a refusal direction of the form `mean(harmful) - mean(harmless)`. **Direction is PER-LAYER
+here (corrected 2026-07-14):** Trial 144 ran `direction_scope = "per layer"`
+(`user_attrs['direction_index'] = None`), so each layer l is orthogonalized against its OWN
+`r_l = mean(harmful) - mean(harmless)` at layer l — NOT one global direction. (Heretic can also
+apply a single interpolated direction when `direction_index` is set; ours did not. Per-component
+tents still set the per-layer STRENGTH.) Those matrices are the tail
 blocks, which sit **inside** J. The readout it leaves alone: `model.norm` is
 **bit-identical** between the two models, `lm_head`/`embed` at the quant floor (see
 `out/abliteration_footprint.txt`). So my first write-up ("abliteration edits the readout

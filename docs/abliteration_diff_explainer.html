@@ -341,8 +341,10 @@
       <em>less</em> safety. It shows the opposite — and the weight footprint (§05) says exactly
       where and how. Heretic performs <b>directional ablation</b>: it orthogonalises the
       residual-<em>writing</em> matrices — every layer's <code>attn.o_proj</code> and
-      <code>mlp.down_proj</code> — against the refusal direction <code>r = mean(harmful) −
-      mean(harmless)</code>. Those matrices are the <b>tail blocks</b>, which sit <b>inside</b>
+      <code>mlp.down_proj</code> — against a refusal direction of the form <code>mean(harmful) −
+      mean(harmless)</code>. <b>Per-layer here:</b> Trial 144 ran <code>direction_scope = "per layer"</code>,
+      so each layer is orthogonalised against its OWN <code>r<sub>l</sub></code> — not one global direction
+      (Heretic can do global too; ours didn't). Those matrices are the <b>tail blocks</b>, which sit <b>inside</b>
       <code>J</code>. The read-out (norm, head, softcap) it leaves <b>untouched</b>:
       <code>model.norm</code> is <b class="hl">bit-identical</b> between the two models,
       <code>lm_head</code> and <code>embed</code> at the quant-noise floor.</p>
@@ -366,7 +368,7 @@
       (harmful-vs-harmless means) from <code>o_proj</code>/<code>down_proj</code>, and that removal
       has a fixed signature in vocabulary space — safety/refusal tokens. The edit's <b>magnitude</b> is
       the same on any input (it's a static weight change); what the lens <b>reads out in token space</b>
-      depends on the prompt, because the fixed direction is projected through prompt-dependent residuals.</p>
+      depends on the prompt, because the fixed (per-layer) directions are projected through prompt-dependent residuals.</p>
     <div class="note" style="border-left-color:var(--green)"><span class="k" style="color:var(--green)">clean-pair test (2026-07-14): magnitude flat, content prompt-conditional — floor HOLDS</span>
       The per-prompt run on the <b>clean matched pair</b> (`pair-base` vs `pair-heretic-t144`) splits the
       question in two. <b>Magnitude</b> is prompt-independent: mean l2 over L32–42 is essentially flat —
