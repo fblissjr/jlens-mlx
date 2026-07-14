@@ -2,11 +2,15 @@
 
 Usage:
     uv run python scripts/fit_monitor.py --out out/band-n14-fixed [--port 8765]
+    # matched-pair fits (one driver, combined log, two out dirs): point --out at the ACTIVE dir;
+    # the combined *_fits.log is auto-discovered, or pass it explicitly:
+    uv run python scripts/fit_monitor.py --out out/pair-heretic-deep --log out/deep_band_fits.log
 
 Serves a small dashboard (polled every 3s) over whatever a LIVE fit run is writing to disk:
 `ckpt/progress.json` (heartbeat), `ckpt/ckpt.json` (banked items), `ckpt/corpus.json` (fitting
 corpus, summarized -- never shipped raw), `ckpt/corpus_decoded.md` (human-readable prompts +
-completions), and the run's `.log` file one level up from `--out`.
+completions), and the run's log file. The log is the per-run sibling `<out>.log` when present,
+else the matched-pair driver's combined `*_fits.log` (auto-discovered), else an explicit `--log`.
 
 Hard invariants:
   - stdlib ONLY -- no pip deps, no bun, no build step, no framework. `import mlx` is FORBIDDEN
@@ -25,7 +29,8 @@ Endpoints (all GET, all read-only):
     /api/corpus_items     -- per-item summary (index/stratum/on_policy/n_tokens/n_fitted_positions)
                              joined with the decoded prompt/completion text, plus a provenance block
     /api/log?n=200        -- last n lines of the run log as JSON (default 200, hard cap 2000), plus
-                             a parsed chunk-progress tail for stall detection
+                             a parsed chunk-progress tail for stall detection, plus `log_name` /
+                             `log_exists` (which log path resolved, and whether it's on disk yet)
     /decoded              -- raw ckpt/corpus_decoded.md (text/markdown), 404 if absent
     anything else          -- 404 (never a raw traceback / 500)
 """
@@ -199,9 +204,32 @@ def _tail_log(path: Path, n: int) -> list[str]:
         return []
 
 
+def discover_run_log(out_root: Path) -> Path:
+    """Resolve the run log for `out_root`, tolerating the matched-pair DRIVER shape. Order:
+      1. the per-run sibling `<parent>/<name>.log` if it exists (single-run convention -- e.g.
+         `out/band-n14-fixed` -> `out/band-n14-fixed.log`);
+      2. else the newest `*_fits.log` in the parent dir -- the matched-pair driver
+         (`run_matched_pair_fits.sh` / `run_deep_band_fits.sh`) fits TWO out dirs sequentially and
+         writes ONE combined log (`out/matched_pair_fits.log`, `out/deep_band_fits.log`), so no
+         per-run `<name>.log` is ever created and the per-run path above would be a dead panel;
+      3. else fall back to the per-run path (which may simply not exist yet for a not-started run).
+    An explicit `--log` overrides all of this in build_handler(). Resolved once at startup: a driver
+    log's name is stable for the whole run, so there's nothing to re-discover per request."""
+    per_run = out_root.parent / f"{out_root.name}.log"
+    if per_run.exists():
+        return per_run
+    try:
+        driver_logs = sorted(
+            (p for p in out_root.parent.glob("*_fits.log") if p.is_file()),
+            key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        driver_logs = []
+    return driver_logs[0] if driver_logs else per_run
+
+
 # --- HTTP handler ------------------------------------------------------------------------------
 
-def build_handler(out_root: Path) -> type[BaseHTTPRequestHandler]:
+def build_handler(out_root: Path, log_override: str | None = None) -> type[BaseHTTPRequestHandler]:
     """Bind a request handler class to a specific sandboxed `--out` root (and its one fixed
     sibling log path) via closure, so nothing depends on mutable module-level globals."""
     ckpt_dir = out_root / "ckpt"
@@ -209,10 +237,12 @@ def build_handler(out_root: Path) -> type[BaseHTTPRequestHandler]:
     ckpt_path = safe_path(ckpt_dir, "ckpt.json")
     corpus_path = safe_path(ckpt_dir, "corpus.json")
     decoded_path = safe_path(ckpt_dir, "corpus_decoded.md")
-    # The run log is a SIBLING of the run dir (one level up), not inside --out. This single path
-    # is computed once, here, from --out -- it is never derived from client/request input, so the
-    # "readable root" traversal guard doesn't apply to it (there is nothing for a client to steer).
-    log_path = out_root.parent / f"{out_root.name}.log"
+    # The run log is a SIBLING of the run dir (one level up), not inside --out. This single path is
+    # computed once, here, from --out (or an explicit --log) -- it is never derived from
+    # client/request input, so the "readable root" traversal guard doesn't apply to it (there is
+    # nothing for a client to steer). `--log` is an operator-supplied launch arg (same trust level
+    # as --out); discover_run_log() handles the matched-pair driver's single combined log.
+    log_path = Path(log_override).resolve() if log_override else discover_run_log(out_root)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "fit-monitor/1.0"
@@ -296,7 +326,14 @@ def build_handler(out_root: Path) -> type[BaseHTTPRequestHandler]:
                     n = 200
                 n = min(n, 2000)
                 lines = _tail_log(log_path, n)
-                self._send_json({"lines": lines, "chunk_progress": parse_chunk_progress(lines)[-20:]})
+                # log_name lets the UI show WHICH log it resolved (esp. the matched-pair combined
+                # driver log, so an empty tail reads as "not that log" vs "nothing yet").
+                self._send_json({
+                    "lines": lines,
+                    "chunk_progress": parse_chunk_progress(lines)[-20:],
+                    "log_name": log_path.name,
+                    "log_exists": log_path.exists(),
+                })
                 return
 
             if path == "/decoded":
@@ -435,7 +472,7 @@ a { color:var(--accent); }
 
     <div class="stall-strip" id="stall-strip"></div>
 
-    <h3>Log tail</h3>
+    <h3>Log tail <span id="log-name" class="muted small" style="text-transform:none; letter-spacing:0"></span></h3>
     <pre id="log-tail" class="log-tail"></pre>
   </div>
 </section>
@@ -586,6 +623,15 @@ async function refreshRun() {
     strip.innerHTML = '<span class="muted">no chunk-progress lines yet</span>';
   }
 
+  const logName = document.getElementById('log-name');
+  if (logData.log_name) {
+    logName.textContent = logData.log_exists ? '· ' + logData.log_name
+                                             : '· ' + logData.log_name + ' (not found yet)';
+    logName.classList.toggle('bad', !logData.log_exists);
+  } else {
+    logName.textContent = '';
+  }
+
   const tail = (logData.lines || []).slice(-40);
   const pre = document.getElementById('log-tail');
   pre.textContent = tail.join('\\n');
@@ -664,10 +710,15 @@ def main(argv: list[str] | None = None) -> int:
                              "path and used as the sandboxed readable root.")
     parser.add_argument("--port", type=int, default=8765,
                         help="Port to bind (default 8765; 0 picks an ephemeral port).")
+    parser.add_argument("--log", default=None,
+                        help="Explicit run-log path to tail. Default: the per-run sibling "
+                             "<out>.log, else auto-discover the matched-pair driver's combined "
+                             "*_fits.log (e.g. out/deep_band_fits.log). Set this to disambiguate "
+                             "when several drivers have run.")
     args = parser.parse_args(argv)
 
     out_root = Path(args.out).resolve()
-    handler_cls = build_handler(out_root)
+    handler_cls = build_handler(out_root, log_override=args.log)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_cls)
     print(f"http://127.0.0.1:{server.server_port}/")
     try:

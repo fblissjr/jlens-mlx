@@ -22,8 +22,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.fit_monitor import (  # noqa: E402
-    build_handler, corpus_items_summary, parse_chunk_progress, parse_decoded_md, safe_path,
-    summarize_corpus,
+    build_handler, corpus_items_summary, discover_run_log, parse_chunk_progress, parse_decoded_md,
+    safe_path, summarize_corpus,
 )
 
 
@@ -250,6 +250,49 @@ def test_safe_path_accepts_absolute_path_that_happens_to_be_inside_root(tmp_path
     assert result == (tmp_path / "ckpt" / "corpus.json").resolve()
 
 
+# --- discover_run_log (matched-pair driver log resolution) --------------------------------------
+
+def test_discover_run_log_prefers_per_run_sibling(tmp_path):
+    out_root = tmp_path / "band-solo"
+    out_root.mkdir()
+    per_run = tmp_path / "band-solo.log"
+    per_run.write_text("x\n")
+    # even with a driver log present, the exact per-run sibling wins when it exists
+    (tmp_path / "matched_pair_fits.log").write_text("y\n")
+    assert discover_run_log(out_root) == per_run
+
+
+def test_discover_run_log_falls_back_to_driver_fits_log(tmp_path):
+    # matched-pair shape: no per-run <name>.log; ONE combined driver log next to the out dirs.
+    out_root = tmp_path / "pair-heretic-deep"
+    out_root.mkdir()
+    driver = tmp_path / "deep_band_fits.log"
+    driver.write_text("fitting...\n")
+    assert discover_run_log(out_root) == driver
+
+
+def test_discover_run_log_picks_newest_fits_log(tmp_path):
+    out_root = tmp_path / "pair-base-deep"
+    out_root.mkdir()
+    older = tmp_path / "matched_pair_fits.log"
+    older.write_text("old\n")
+    newer = tmp_path / "deep_band_fits.log"
+    newer.write_text("new\n")
+    import os
+    os.utime(older, (1_000_000, 1_000_000))
+    os.utime(newer, (2_000_000, 2_000_000))
+    assert discover_run_log(out_root) == newer
+
+
+def test_discover_run_log_no_log_returns_per_run_path(tmp_path):
+    # nothing on disk -> the per-run path (which simply doesn't exist yet); never raises.
+    out_root = tmp_path / "band-not-started"
+    out_root.mkdir()
+    result = discover_run_log(out_root)
+    assert result == tmp_path / "band-not-started.log"
+    assert not result.exists()
+
+
 # --- smoke test: real server, hermetic temp dir, every endpoint ---------------------------------
 
 def _populate_run_dir(run_dir: Path) -> None:
@@ -381,7 +424,12 @@ def test_smoke_progress_and_ckpt_absent_returns_empty_dict(tmp_path):
         assert json.loads(body) == {"items": [], "provenance": {}}
 
         status, body = _get(port, "/api/log")
-        assert status == 200 and json.loads(body) == {"lines": [], "chunk_progress": []}
+        assert status == 200
+        log_resp = json.loads(body)
+        assert log_resp["lines"] == [] and log_resp["chunk_progress"] == []
+        # no log file anywhere -> resolves to the per-run path, flagged not-yet-present
+        assert log_resp["log_name"] == "band-not-started.log"
+        assert log_resp["log_exists"] is False
     finally:
         server.shutdown()
         server.server_close()
@@ -399,6 +447,51 @@ def test_smoke_decoded_404_when_absent(tmp_path):
             assert False, "expected HTTPError"
         except urllib.error.HTTPError as e:
             assert e.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_smoke_matched_pair_driver_log_auto_discovered(tmp_path):
+    # The matched-pair driver writes ONE combined *_fits.log and no per-run <name>.log. Pointing
+    # --out at the active pair dir must still surface that combined log's tail + stall detection.
+    run_dir = tmp_path / "pair-heretic-deep"
+    (run_dir / "ckpt").mkdir(parents=True)
+    (tmp_path / "deep_band_fits.log").write_text("\n".join(CHUNK_LINES) + "\n")
+    server, thread = _start_server(run_dir)
+    port = server.server_port
+    try:
+        status, body = _get(port, "/api/log?n=200")
+        assert status == 200
+        resp = json.loads(body)
+        assert resp["log_name"] == "deep_band_fits.log" and resp["log_exists"] is True
+        assert any("item 1/12 chunk 1/40" in line for line in resp["lines"])
+        assert len(resp["chunk_progress"]) == 3
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_smoke_explicit_log_override(tmp_path):
+    # --log wins over both the per-run sibling and any driver-log discovery.
+    run_dir = tmp_path / "pair-base-deep"
+    (run_dir / "ckpt").mkdir(parents=True)
+    (run_dir.parent / f"{run_dir.name}.log").write_text("ignored per-run log\n")
+    explicit = tmp_path / "somewhere_else.log"
+    explicit.write_text("\n".join(CHUNK_LINES) + "\n")
+    handler_cls = build_handler(run_dir, log_override=str(explicit))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_port
+    try:
+        status, body = _get(port, "/api/log?n=200")
+        assert status == 200
+        resp = json.loads(body)
+        assert resp["log_name"] == "somewhere_else.log"
+        assert any("item 1/12 chunk 1/40" in line for line in resp["lines"])
     finally:
         server.shutdown()
         server.server_close()
