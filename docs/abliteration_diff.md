@@ -30,8 +30,32 @@ the old pair, tracking the deep tent:
   `...**`, `<|box_end|>`. The safety-semantic shift is real but sits at moderate `l2` BELOW the
   shallow structural churn — different from coder3101, whose safety cluster sat shallower (L32–42).
 - The refusal cluster climbing at L47 says its peak is **past the band** — Trial 144's tent centers
-  L42–59. A deep-band fit (L48–59, both models, same corpus → `out/pair-*-deep`) is running to
-  confirm the peak location; the 16..47 band structurally cannot see it.
+  L42–59. So we fit a deep-band L48–59 pair (both models, same corpus → `out/pair-*-deep`); see the
+  deep-band section next.
+
+**Deep-band diff L48–59 (`out/diff_deep_pair.log`, 2026-07-14) — readout tracks o_proj, NOT down_proj.**
+Fitting the tent's deep half (both tents: o_proj center ~L46, down_proj center ~L58) gave a result that
+is *better* than "peak confirmed":
+- **L48–54 — the refusal cluster CONTINUES and is strong** (l2 peak L48 ≈ 184, decaying): `绝对不会`
+  (absolutely will not), `Safety`/`安全风险`, `unacceptable`, `violating`, `infringement`, `harmed`,
+  `Illegal`. So it was genuinely still rising at L47 — the 16..47 band cut it off mid-ridge.
+- **L55–59 — fades to STRUCTURAL noise** (l2 72–98): `<Input`, `=S`/`*S`/`>S`, `{j`/`|m` — only faint
+  refusal traces (`Illegal` at L57–58). This is exactly where the **down_proj/MLP tent is heaviest** (~L58).
+- **The fade is NOT a legibility artifact — checked and refuted.** The deep lens's own per-layer
+  legibility RISES with depth (L48 0.89 → L58 **0.94**), entropy FALLS (5.7 → 2.4): L55–59 are the
+  *most* legible layers in the band. The lens reads them cleanly; the abliteration diff simply carries
+  no refusal signature there.
+- **Finding: the lens diff tracks the o_proj (attention-output) tent, not the down_proj (MLP-output)
+  tent.** The refusal readout runs L41→L54 (over the o_proj peak ~L46) and dies at the down_proj peak
+  (~L58) — despite that edit being the LARGEST (weight footprint peaks L55–56) and those layers the most
+  legible. So the deep MLP-output abliteration is **readout-invisible**: a real, large weight edit in
+  legible layers that does not project onto refusal-token directions. Plausibly the per-layer direction
+  `r_l` at deep layers isn't refusal-token-shaped (the harmful−harmless axis is encoded more abstractly
+  there), which is consistent with Trial 144's per-layer `direction_scope`.
+- **This bounds the footprint↔diff cross-validation (§ weight footprint below):** the co-localization
+  holds for the o_proj/attention edit (weight peak L43–47 ≈ readout cluster) but **breaks for the deep
+  down_proj/MLP edit** (weight peak ~L58, readout ≈ zero). The lens sees *where attention was
+  abliterated*, not *where MLP was*. A genuine modality-selective blind spot, not a depth/legibility one.
 
 **Per-prompt diff (`out/per_prompt_clean_pair.log`) — the decoupling, and the floor reversal:**
 - **Magnitude (l2) is prompt-INDEPENDENT (flat).** Mean l2 over L32–42: benign:recipe **452.5**,
