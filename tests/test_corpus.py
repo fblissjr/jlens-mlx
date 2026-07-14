@@ -21,7 +21,7 @@ from jlens_mlx.corpus import (  # noqa: E402
     ABLITERATED_QWEN, SAFETY_BENIGN, SAFETY_HARMFUL, WIKITEXT_CONTROL,
     Corpus, CorpusItem, PositionMask, Recipe, Stratum,
     _chat_ids, _extract_prompt, _prompt_fits, _weighted_counts,
-    build_positions, decode_corpus, diversity_report,
+    build_positions, decode_corpus, diversity_report, resolve_on_policy_fraction,
 )
 
 
@@ -399,3 +399,26 @@ def test_build_positions_min_position_all_filtered_falls_back():
     pos = build_positions(ids, 12, PositionMask(), content_start=2, content_end=8,
                           min_position=16)
     assert pos == [10]
+
+
+# --- resolve_on_policy_fraction (per-stratum on-policy override) ---------------------------------
+
+def _strat(kind: str, frac=None) -> Stratum:
+    return Stratum(hf_id="x", weight=0.5, kind=kind, on_policy_fraction=frac)
+
+
+def test_resolve_on_policy_fraction_inherits_recipe_default_when_unset():
+    r = Recipe(name="r", on_policy_fraction=0.6)
+    assert resolve_on_policy_fraction(_strat("reasoning"), r) == 0.6  # None -> recipe default
+
+
+def test_resolve_on_policy_fraction_stratum_override_wins():
+    r = Recipe(name="r", on_policy_fraction=0.6)
+    assert resolve_on_policy_fraction(_strat("safety", 1.0), r) == 1.0   # all-on-policy safety
+    assert resolve_on_policy_fraction(_strat("reasoning", 0.5), r) == 0.5
+
+
+def test_resolve_on_policy_fraction_override_zero_is_respected_not_treated_as_falsy():
+    # 0.0 is a real value (human-text only), NOT "unset" -- must not fall through to the default.
+    r = Recipe(name="r", on_policy_fraction=0.6)
+    assert resolve_on_policy_fraction(_strat("control", 0.0), r) == 0.0

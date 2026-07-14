@@ -48,6 +48,11 @@ class Stratum:
     license: str = ""
     gated: bool = False
     note: str = ""
+    on_policy_fraction: float | None = None  # per-stratum override of Recipe.on_policy_fraction
+    #   (None = inherit the recipe default). Set to 1.0 on the `safety` stratum so HARD harmful
+    #   prompts get a generated response span (~47 fitted positions) instead of the 1-4 positions
+    #   an off-policy prompt-tail yields -- else the hardest refusals are ~1% of the fit. See
+    #   internal/next_run_corpus_and_speed.md.
 
 
 @dataclass
@@ -482,6 +487,14 @@ def diversity_report(items: list["CorpusItem"]) -> dict:
     return report
 
 
+def resolve_on_policy_fraction(stratum: Stratum, recipe: Recipe) -> float:
+    """The on-policy fraction to use for `stratum`: its own override if set, else the recipe
+    default. Lets `safety` be all-on-policy (hard prompts get response spans -> real position
+    weight) while other strata stay mixed -- see internal/next_run_corpus_and_speed.md."""
+    return stratum.on_policy_fraction if stratum.on_policy_fraction is not None \
+        else recipe.on_policy_fraction
+
+
 def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int = 64,
                  max_seq_len: int | None = 512, decoded_path: str | None = None) -> Corpus:
     """Render `recipe` into a Corpus of chat-templated, position-masked prompts.
@@ -537,7 +550,8 @@ def build_corpus(model, tokenizer, recipe: Recipe, *, on_policy_max_tokens: int 
     items: list[CorpusItem] = []
     dropped = 0
     for stratum, prompts in per_stratum:
-        n_op = int(round(len(prompts) * recipe.on_policy_fraction)) if model is not None else 0
+        frac = resolve_on_policy_fraction(stratum, recipe)
+        n_op = int(round(len(prompts) * frac)) if model is not None else 0
         op_texts, human_texts = prompts[:n_op], prompts[n_op:]
 
         # On-policy: pre-filter by the templated PREFIX length (reserving room for the completion)

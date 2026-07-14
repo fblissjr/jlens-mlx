@@ -54,12 +54,16 @@ from jlens_mlx.fit import _hms, _model_type, fit_corpus  # noqa: E402
 # in the safety strata; a matched harmful/benign pair enables the later difference-of-Jacobians).
 # Small n so a deep-band fit finishes in ~1-1.5h; the full ABLITERATED_QWEN recipe is the overnight run.
 BAND_BOOTSTRAP = C.Recipe(
-    name="band-bootstrap-v1", n_prompts=6, on_policy_fraction=0.6,
+    name="band-bootstrap-v2", n_prompts=6, on_policy_fraction=0.6,
     strata=[
+        # safety + benign forced ALL-on-policy: v1 left the hardest harmful prompts off-policy
+        # (bomb=1 fitted position, hate-letter=4), so hard content was ~1% of the fit. On-policy
+        # gives each a ~47-position response span. reasoning inherits the 0.6 default.
+        # Rationale + measured skew: internal/next_run_corpus_and_speed.md.
         C.Stratum("JailbreakBench/JBB-Behaviors", 0.34, "safety", config="behaviors",
-                  split="harmful", license="MIT"),
+                  split="harmful", license="MIT", on_policy_fraction=1.0),
         C.Stratum("JailbreakBench/JBB-Behaviors", 0.33, "benign", config="behaviors",
-                  split="benign", license="MIT"),
+                  split="benign", license="MIT", on_policy_fraction=1.0),
         C.Stratum("open-r1/OpenR1-Math-220k", 0.33, "reasoning", license="Apache-2.0"),
     ],
 )
