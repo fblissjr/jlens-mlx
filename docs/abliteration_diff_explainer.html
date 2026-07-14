@@ -433,6 +433,25 @@
       <code>min_weight_distance</code>). The footprint above <em>is</em> that tent, imaged from the
       weights: flat → ramp → plateau/peak L33–36 → taper. And the vision tower is
       <b class="hl">bit-identical</b> (max |B−A| = 0) — abliteration never touched it.</div>
+
+    <div class="note" style="border-left-color:var(--amber);margin-top:18px"><span class="k" style="color:var(--amber)">deep band L48–59 (2026-07-14): the cross-validation has a BOUND — readout tracks attention, not deep MLP</span>
+      Our own controlled abliteration (Trial 144) has two tents: <b>o_proj ~L46</b> (attention) and
+      <b>down_proj ~L58</b> (MLP). We fit the deep half (L48–59) and diffed. The refusal readout
+      <b>continues L48–54</b> (<code>绝对不会</code>/<code>unacceptable</code>/<code>Illegal</code>) then
+      <b>fades to structural noise L55–59</b> — exactly where the MLP edit is <em>heaviest</em>.
+      <br><br>Two checks kill the easy explanations. (1) <b>Not a legibility fade:</b> the deep lens's own
+      legibility <em>rises</em> with depth (L48 0.89 → L58 <b>0.94</b>) — those are the most legible layers,
+      the lens reads them fine. (2) <b>The deep edit direction IS refusal-shaped:</b> logit-lens-decoding the
+      dominant singular vector of the weight delta (<code>scripts/direction_readout.py</code>, weight-space,
+      no GPU) gives refusal tokens at EVERY layer, deep included — L55–58 → <code>抱歉</code>(sorry)/
+      <code>refusal</code>/<code>refuse</code>/<code>Safety</code>.
+      <br><br><b>So the deep MLP edit is readout-REDUNDANT, not misdirected:</b> it removes a genuinely
+      refusal-shaped direction, but that removal barely moves the readout (diff l2 decays L48→L59). Refusal
+      <em>transport</em> is carried by the attention-output (<code>o_proj</code>) path; editing the deep MLP
+      along the same direction has little marginal effect (the deep residuals carry little of it — written
+      upstream). The lens diff measures readout <em>effect</em>, so it surfaces the edit that matters and
+      skips the one that's redundant — even though the weight footprint weighs them the other way. The §05
+      co-localization holds for attention, breaks for deep MLP: a property of the edit, not a blind spot.</div>
   </section>
 
   <!-- STAGE 6 -->
