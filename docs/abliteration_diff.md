@@ -48,14 +48,25 @@ is *better* than "peak confirmed":
 - **Finding: the lens diff tracks the o_proj (attention-output) tent, not the down_proj (MLP-output)
   tent.** The refusal readout runs L41→L54 (over the o_proj peak ~L46) and dies at the down_proj peak
   (~L58) — despite that edit being the LARGEST (weight footprint peaks L55–56) and those layers the most
-  legible. So the deep MLP-output abliteration is **readout-invisible**: a real, large weight edit in
-  legible layers that does not project onto refusal-token directions. Plausibly the per-layer direction
-  `r_l` at deep layers isn't refusal-token-shaped (the harmful−harmless axis is encoded more abstractly
-  there), which is consistent with Trial 144's per-layer `direction_scope`.
+  legible.
+- **WHY (weight-space direction test, `scripts/direction_readout.py`, 2026-07-14) — it is NOT that the
+  deep direction is non-refusal-shaped.** Heretic's per-layer edit is low-rank, so the dominant left
+  singular vector of the weight delta `W_B − W_A` at each layer IS the direction the edit moved (the
+  per-layer `r_l`). Logit-lens-decoding it (no Metal, weight-space only) gives **refusal tokens at EVERY
+  edited layer, deep included**: L44–48 → `ethical`/`拒绝`(refuse)/`harmful`/`严禁`(forbidden); L55–58 →
+  `抱歉`(sorry)/`refusal`/`refuse`/`refused`/`拒绝`/`Safety`. So the deep direction **is** refusal-shaped.
+  The deep MLP edit is therefore **readout-REDUNDANT, not misdirected**: it removes a genuinely
+  refusal-shaped direction, but doing so barely moves the transport readout (diff l2 decays L48→L59).
+  Refusal transport is carried by the **attention-output (o_proj)** path; editing the deep MLP-output
+  along the same direction has little marginal readout effect — plausibly because the deep prompt
+  residuals carry little `r_l` content (the refusal-relevant signal was written upstream by attention).
+  So the structural tokens at L55–59 are the noise floor of a near-zero readout effect, not a mis-aimed edit.
 - **This bounds the footprint↔diff cross-validation (§ weight footprint below):** the co-localization
   holds for the o_proj/attention edit (weight peak L43–47 ≈ readout cluster) but **breaks for the deep
-  down_proj/MLP edit** (weight peak ~L58, readout ≈ zero). The lens sees *where attention was
-  abliterated*, not *where MLP was*. A genuine modality-selective blind spot, not a depth/legibility one.
+  down_proj/MLP edit** (weight peak ~L58, readout ≈ zero) — because that edit is readout-redundant, not
+  because the lens can't see it. The lens diff measures *readout EFFECT*, so it surfaces the edit that
+  matters (attention) and not the one that's redundant (deep MLP), even though the footprint weighs them
+  the other way. A property of the edit, not a blind spot of the instrument.
 
 **Per-prompt diff (`out/per_prompt_clean_pair.log`) — the decoupling, and the floor reversal:**
 - **Magnitude (l2) is prompt-INDEPENDENT (flat).** Mean l2 over L32–42: benign:recipe **452.5**,
