@@ -24,7 +24,10 @@ Hard invariants:
 Endpoints (all GET, all read-only):
     /                    -- the HTML dashboard
     /api/progress        -- ckpt/progress.json, re-read fresh every request ({} if absent)
-    /api/ckpt            -- ckpt/ckpt.json, re-read fresh every request ({} if absent)
+    /api/ckpt            -- ckpt/ckpt.json + a derived `band_context` (band lo/hi, n_layers,
+                            target, chunk_size, use_chain) so the client shows WHAT is being fit
+    /api/sidecar         -- completed lens's lens.sidecar.json, summarized: per-layer legibility,
+                            the identity tripwire, band/target/provenance ({} until a lens banks)
     /api/corpus           -- small derived summary of ckpt/corpus.json (never raw token ids/items)
     /api/corpus_items     -- per-item summary (index/stratum/on_policy/n_tokens/n_fitted_positions)
                              joined with the decoded prompt/completion text, plus a provenance block
@@ -138,6 +141,48 @@ def corpus_items_summary(corpus: dict) -> list[dict]:
     return out
 
 
+def summarize_sidecar(sidecar: dict) -> dict:
+    """Curated, display-safe view of a completed lens's `lens.sidecar.json` -- the "what came out"
+    metrics (per-layer legibility, the identity tripwire, band/target/provenance). All values here
+    are metrics/metadata; the sidecar carries NO token ids, so nothing to strip. Missing keys
+    degrade to None/empty rather than raising (a partially-written file during save is possible)."""
+    if not sidecar:
+        return {}
+    return {
+        "source_layers": sidecar.get("source_layers"),
+        "band": sidecar.get("band"),
+        "target_layer": sidecar.get("target_layer"),
+        "chunk_size": sidecar.get("chunk_size"),
+        "fit_kind": sidecar.get("fit_kind"),
+        "model_id": sidecar.get("model_id"),
+        "arch": sidecar.get("arch"),
+        "fit_date": sidecar.get("fit_date"),
+        "identity_ok": sidecar.get("fidelity_identity_ok"),
+        "legibility": sidecar.get("legibility") or {},
+        "legibility_ranked_band": sidecar.get("legibility_ranked_band") or [],
+    }
+
+
+def band_context(ckpt: dict) -> dict:
+    """Derive the live "what is being fit" summary from `ckpt.json` -- the band of source layers,
+    the target layer J differentiates back FROM, and the method (chain sweep vs direct) + dim-chunk
+    size. This is what turns an opaque "item 7/12 chunk 37/80" into "fitting L48-59 -> target 63".
+    `layers` is the fitted band; chunks slice the D_out (=d_model) axis of each item's Jacobian, so
+    a chunk is a dim-batch slice, NOT a layer (the chain fits the whole band per item in one sweep)."""
+    if not ckpt:
+        return {}
+    layers = ckpt.get("layers") or []
+    return {
+        "layers": layers,
+        "band_lo": min(layers) if layers else None,
+        "band_hi": max(layers) if layers else None,
+        "n_layers": len(layers),
+        "target": ckpt.get("target"),
+        "chunk_size": ckpt.get("chunk_size"),
+        "use_chain": ckpt.get("use_chain"),
+    }
+
+
 def parse_decoded_md(text: str) -> list[dict]:
     """Parse `corpus_decoded.md` into per-item {index, stratum, on_policy, tokens,
     masked_positions, prompt, completion}. On-policy items have a prompt/completion split (the
@@ -237,6 +282,8 @@ def build_handler(out_root: Path, log_override: str | None = None) -> type[BaseH
     ckpt_path = safe_path(ckpt_dir, "ckpt.json")
     corpus_path = safe_path(ckpt_dir, "corpus.json")
     decoded_path = safe_path(ckpt_dir, "corpus_decoded.md")
+    # The completed-lens sidecar sits at the run-dir ROOT (next to lens.safetensors), NOT in ckpt/.
+    sidecar_path = safe_path(out_root, "lens.sidecar.json")
     # The run log is a SIBLING of the run dir (one level up), not inside --out. This single path is
     # computed once, here, from --out (or an explicit --log) -- it is never derived from
     # client/request input, so the "readable root" traversal guard doesn't apply to it (there is
@@ -288,7 +335,16 @@ def build_handler(out_root: Path, log_override: str | None = None) -> type[BaseH
                 return
 
             if path == "/api/ckpt":
-                self._send_json(_read_json_safe(ckpt_path) if ckpt_path else {})
+                ckpt = _read_json_safe(ckpt_path) if ckpt_path else {}
+                # Attach the derived band context so the client needn't re-derive min/max/len.
+                if ckpt:
+                    ckpt = {**ckpt, "band_context": band_context(ckpt)}
+                self._send_json(ckpt)
+                return
+
+            if path == "/api/sidecar":
+                sidecar = _read_json_safe(sidecar_path) if sidecar_path else {}
+                self._send_json(summarize_sidecar(sidecar))
                 return
 
             if path == "/api/corpus":
@@ -393,6 +449,19 @@ section { padding:20px; max-width:900px; margin:0 auto; }
 .last-update.stale { color:var(--bad); font-weight:600; }
 .corpus-health-mini, .corpus-health { background:var(--panel); border:1px solid var(--border);
   border-radius:8px; padding:10px 12px; margin-top:16px; font-size:13px; }
+.fit-context { margin-top:8px; font-size:13px; color:var(--muted); }
+.fit-context b { color:var(--text); font-weight:600; }
+.fit-context .hint { display:block; font-size:11px; margin-top:3px; opacity:.85; }
+.lens-panel { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+  padding:10px 12px; margin-top:16px; }
+.lens-panel-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.lens-meta { font-size:12px; color:var(--muted); margin-bottom:8px; }
+.leg-row { display:flex; align-items:center; gap:8px; padding:2px 0; font-size:12px; }
+.leg-row .lbl { width:44px; color:var(--muted); font-family:ui-monospace, Menlo, monospace; }
+.leg-row .track { flex:1; background:var(--bg); border:1px solid var(--border); border-radius:4px;
+  height:12px; overflow:hidden; }
+.leg-row .fill { background:var(--accent); height:100%; }
+.leg-row .val { width:42px; text-align:right; font-family:ui-monospace, Menlo, monospace; }
 .health-row { display:flex; justify-content:space-between; padding:3px 0; gap:12px; }
 .ok { color:var(--ok); font-weight:600; }
 .warn { color:var(--warn); font-weight:600; }
@@ -454,6 +523,7 @@ a { color:var(--accent); }
       <span id="status-item">item &mdash; / &mdash;</span>
       <span id="status-chunk">chunk &mdash; / &mdash;</span>
     </div>
+    <div class="fit-context" id="fit-context"></div>
     <div class="bar-label">Overall (positions)</div>
     <div class="bar"><div id="bar-overall" class="bar-fill"></div></div>
     <div class="bar-label">This item (chunks)</div>
@@ -469,6 +539,17 @@ a { color:var(--accent); }
     <div id="last-update" class="last-update">last update &mdash;</div>
 
     <div class="corpus-health-mini" id="corpus-health-mini"></div>
+
+    <div class="lens-panel hidden" id="lens-panel">
+      <div class="lens-panel-head">
+        <h3 style="margin:0">Banked lens &mdash; per-layer legibility</h3>
+        <span id="lens-identity" class="badge"></span>
+      </div>
+      <div class="lens-meta" id="lens-meta"></div>
+      <div id="lens-legibility"></div>
+      <div class="muted small" style="margin-top:6px">legibility = how token-decodable that
+        layer's map is (ranked). A diagnostic, not the finding &mdash; read the tokens, not the score.</div>
+    </div>
 
     <div class="stall-strip" id="stall-strip"></div>
 
@@ -578,6 +659,19 @@ async function refreshRun() {
   document.getElementById('status-chunk').textContent =
     'chunk ' + (progress.chunk ?? '—') + ' / ' + (progress.n_chunks ?? '—');
 
+  const bc = ckpt.band_context || {};
+  const fc = document.getElementById('fit-context');
+  if (bc.n_layers) {
+    const method = bc.use_chain ? 'chain sweep' : 'direct';
+    fc.innerHTML = 'fitting <b>L' + bc.band_lo + '–' + bc.band_hi + '</b> (' + bc.n_layers +
+      ' layers) &rarr; target <b>' + bc.target + '</b> · ' + method + ' · dim-chunk <b>' +
+      bc.chunk_size + '</b>' +
+      '<span class="hint">item = corpus prompt · chunk = a dim-slice of the output Jacobian ' +
+      '(the whole band is fit per item, not one layer at a time)</span>';
+  } else {
+    fc.textContent = '';
+  }
+
   const posDone = progress.positions_done ?? 0, posTotal = progress.positions_total ?? 0;
   document.getElementById('bar-overall').style.width =
     posTotal ? Math.min(100, 100 * posDone / posTotal) + '%' : '0%';
@@ -608,6 +702,10 @@ async function refreshRun() {
 
   await refreshCorpusHealth('corpus-health-mini');
 
+  let sidecar = {};
+  try { sidecar = await fetchJSON('/api/sidecar'); } catch (e) { /* keep polling */ }
+  renderLensPanel(sidecar);
+
   const cp = logData.chunk_progress || [];
   const strip = document.getElementById('stall-strip');
   if (cp.length) {
@@ -636,6 +734,54 @@ async function refreshRun() {
   const pre = document.getElementById('log-tail');
   pre.textContent = tail.join('\\n');
   pre.scrollTop = pre.scrollHeight;
+}
+
+function renderLensPanel(sidecar) {
+  const panel = document.getElementById('lens-panel');
+  const leg = (sidecar && sidecar.legibility) || {};
+  const has = Object.keys(leg).length > 0;
+  panel.classList.toggle('hidden', !has);
+  if (!has) return;
+
+  const idOk = sidecar.identity_ok;
+  const badge = document.getElementById('lens-identity');
+  badge.textContent = idOk === true ? 'identity ✓' : (idOk === false ? 'identity ✗' : 'identity —');
+  badge.className = 'badge ' + (idOk === true ? 'benign' : idOk === false ? 'harmful' : 'other');
+
+  const sl = sidecar.source_layers || [];
+  document.getElementById('lens-meta').innerHTML =
+    (sidecar.model_id ? esc(sidecar.model_id) + ' · ' : '') +
+    (sl.length ? 'band L' + sl[0] + '–' + sl[sl.length - 1] + ' ' : '') +
+    '&rarr; target ' + (sidecar.target_layer ?? '—') +
+    (sidecar.fit_date ? ' · ' + esc(sidecar.fit_date) : '');
+
+  // legibility[L] is {legibility, entropy} (defend against a bare number too, in case the
+  // sidecar format ever flattens).
+  const legVal = function (L) {
+    const rec = leg[String(L)];
+    if (rec === undefined || rec === null) return null;
+    return (typeof rec === 'number') ? rec : rec.legibility;
+  };
+  const legEnt = function (L) {
+    const rec = leg[String(L)];
+    return (rec && typeof rec === 'object' && rec.entropy != null) ? rec.entropy : null;
+  };
+  // ranked most-legible first (the sidecar ships the ranking; fall back to sorting by value)
+  const ranked = (sidecar.legibility_ranked_band && sidecar.legibility_ranked_band.length)
+    ? sidecar.legibility_ranked_band
+    : Object.keys(leg).map(Number).sort(function (a, b) { return (legVal(b) || 0) - (legVal(a) || 0); });
+  const vals = Object.keys(leg).map(legVal).filter(function (v) { return v != null; });
+  const maxV = Math.max.apply(null, vals.concat([0.0001]));
+  document.getElementById('lens-legibility').innerHTML = ranked.map(function (L) {
+    const v = legVal(L);
+    if (v == null) return '';
+    const pct = Math.max(2, Math.min(100, 100 * Number(v) / maxV));
+    const ent = legEnt(L);
+    const title = ent != null ? ' title="entropy ' + Number(ent).toFixed(2) + '"' : '';
+    return '<div class="leg-row"' + title + '><span class="lbl">L' + L + '</span>' +
+      '<span class="track"><span class="fill" style="width:' + pct + '%"></span></span>' +
+      '<span class="val">' + Number(v).toFixed(2) + '</span></div>';
+  }).join('');
 }
 
 function renderCard(it) {

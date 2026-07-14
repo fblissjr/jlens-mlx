@@ -22,8 +22,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.fit_monitor import (  # noqa: E402
-    build_handler, corpus_items_summary, discover_run_log, parse_chunk_progress, parse_decoded_md,
-    safe_path, summarize_corpus,
+    band_context, build_handler, corpus_items_summary, discover_run_log, parse_chunk_progress,
+    parse_decoded_md, safe_path, summarize_corpus, summarize_sidecar,
 )
 
 
@@ -250,6 +250,52 @@ def test_safe_path_accepts_absolute_path_that_happens_to_be_inside_root(tmp_path
     assert result == (tmp_path / "ckpt" / "corpus.json").resolve()
 
 
+# --- band_context (live "what is being fit" from ckpt.json) -------------------------------------
+
+def test_band_context_derives_band_and_method():
+    ckpt = {"layers": [48, 49, 50, 51], "target": 63, "chunk_size": 64, "use_chain": True,
+            "n_done": 2, "n_total": 12}
+    bc = band_context(ckpt)
+    assert bc["band_lo"] == 48 and bc["band_hi"] == 51 and bc["n_layers"] == 4
+    assert bc["target"] == 63 and bc["chunk_size"] == 64 and bc["use_chain"] is True
+
+
+def test_band_context_empty_and_no_layers():
+    assert band_context({}) == {}
+    bc = band_context({"target": 63})  # no layers key
+    assert bc["n_layers"] == 0 and bc["band_lo"] is None and bc["band_hi"] is None
+
+
+# --- summarize_sidecar (completed-lens per-layer metrics) ----------------------------------------
+
+def _sample_sidecar() -> dict:
+    return {
+        "source_layers": [48, 49, 50], "band": [16, 48], "target_layer": 63, "chunk_size": 64,
+        "fit_kind": "band-corpus", "model_id": "Qwen3.5-27B-x-8bit-ours", "arch": "qwen3_5",
+        "fit_date": "2026-07-14", "fidelity_identity_ok": True,
+        # real shape: per-layer is a nested {legibility, entropy} record, NOT a bare float
+        "legibility": {"48": {"legibility": 0.61, "entropy": 8.1},
+                       "49": {"legibility": 0.55, "entropy": 9.0},
+                       "50": {"legibility": 0.42, "entropy": 9.6}},
+        "legibility_ranked_band": [48, 49, 50],
+        "corpus": {"n_prompts": 12}, "kernel": {"all_on_kernel": True},
+    }
+
+
+def test_summarize_sidecar_carries_metrics_and_identity():
+    s = summarize_sidecar(_sample_sidecar())
+    assert s["identity_ok"] is True
+    assert s["legibility"]["48"]["legibility"] == 0.61  # nested {legibility, entropy} record
+    assert s["legibility_ranked_band"] == [48, 49, 50]
+    assert s["target_layer"] == 63 and s["model_id"] == "Qwen3.5-27B-x-8bit-ours"
+
+
+def test_summarize_sidecar_empty_and_missing_keys():
+    assert summarize_sidecar({}) == {}
+    s = summarize_sidecar({"source_layers": [1, 2]})  # only one key present
+    assert s["identity_ok"] is None and s["legibility"] == {} and s["legibility_ranked_band"] == []
+
+
 # --- discover_run_log (matched-pair driver log resolution) --------------------------------------
 
 def test_discover_run_log_prefers_per_run_sibling(tmp_path):
@@ -313,6 +359,9 @@ def _populate_run_dir(run_dir: Path) -> None:
     (ckpt / "corpus.json").write_text(json.dumps(_sample_corpus()))
     (ckpt / "corpus_decoded.md").write_text(SAMPLE_DECODED_MD)
 
+    # completed-lens sidecar at the run-dir ROOT (next to lens.safetensors), not in ckpt/
+    (run_dir / "lens.sidecar.json").write_text(json.dumps(_sample_sidecar()))
+
     # sibling .log file, one level up from ckpt/ (i.e. next to run_dir, matching run_dir.name)
     log_path = run_dir.parent / f"{run_dir.name}.log"
     log_path.write_text("\n".join(CHUNK_LINES) + "\n")
@@ -352,6 +401,16 @@ def test_smoke_all_endpoints(tmp_path):
         assert status == 200
         ckpt = json.loads(body)
         assert ckpt["n_done"] == 1 and ckpt["n_total"] == 2
+        # derived band context so the client can show WHAT is being fit
+        assert ckpt["band_context"]["band_lo"] == 1 and ckpt["band_context"]["band_hi"] == 3
+        assert ckpt["band_context"]["target"] == 5 and ckpt["band_context"]["use_chain"] is True
+
+        status, body = _get(port, "/api/sidecar")
+        assert status == 200
+        sc = json.loads(body)
+        assert sc["identity_ok"] is True and sc["target_layer"] == 63
+        assert sc["legibility"]["48"]["legibility"] == 0.61
+        assert sc["legibility_ranked_band"] == [48, 49, 50]
 
         status, body = _get(port, "/api/corpus")
         assert status == 200
@@ -418,6 +477,9 @@ def test_smoke_progress_and_ckpt_absent_returns_empty_dict(tmp_path):
 
         status, body = _get(port, "/api/corpus")
         assert status == 200 and json.loads(body) == {}
+
+        status, body = _get(port, "/api/sidecar")
+        assert status == 200 and json.loads(body) == {}  # no lens banked yet
 
         status, body = _get(port, "/api/corpus_items")
         assert status == 200
